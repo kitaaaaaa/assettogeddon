@@ -164,5 +164,27 @@ for _ in pairs(H.state().audioFiles) do files = files + 1 end
 for _ = 1, 600 do H.frame() end
 check(H.audioLive <= files * 4, ('finished sounds disposed: %d events live, %d files (4 copies each)'):format(H.audioLive, files))
 
+-- the clock reading infinite, NaN or absurd (as while AC loads or restarts a session): those frames are skipped
+-- (an infinite clock used to loop forever and freeze the game; a hang here is that bug back)
+for _, v in ipairs({-math.huge, math.huge, 0 / 0, -1e18}) do
+  H.sim.timeToSessionStart = v
+  for _ = 1, 5 do H.frame() end
+end
+-- restarting the session: the clock goes back to before the start. A fresh start: everyone alive, no scores,
+-- and the old run's kills don't happen again
+H.sim.timeToSessionStart = 4000
+for _ = 1, 10 do H.frame() end
+st = H.state()
+local deadAfter, credits = 0, 0
+for _, p in ipairs(st.peds) do if p.hitPoints < 0 then deadAfter = deadAfter + 1 end end
+for _, sc in pairs(st.scores) do credits = credits + sc.credits end
+check(deadAfter == 0 and credits == 0 and #st.log.list == 0, ('restart: fresh start (dead %d, credits %d, events %d)'):format(deadAfter, credits, #st.log.list))
+H.cars[0].velocity:set(0, 0, 0) H.cars[0].speedMs = 0 H.cars[1].velocity:set(0, 0, 0) H.cars[1].speedMs = 0
+H.sim.cameraPosition:set(5000, 2, 5000)
+for _ = 1, 600 do H.frame() end  -- past the old kills' times
+deadAfter = 0
+for _, p in ipairs(H.state().peds) do if p.hitPoints < 0 then deadAfter = deadAfter + 1 end end
+check(deadAfter == 0, 'restart: the old run\'s kills don\'t come back: ' .. deadAfter .. ' dead')
+
 print(failures == 0 and 'smoke test passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)

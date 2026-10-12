@@ -102,6 +102,7 @@ Every client running the app sees the same peds, and replays show the same kills
   the events up to that moment; a saved replay opened later works when played from the start.
 - **Not synced, on purpose**: gibs, blood trails and sounds (cosmetic), and where a frightened ped runs
   before it calms down (it can differ slightly between clients until the deciding client's event arrives).
+- **Restarting a session** is a fresh start: everyone comes back to life and the scores reset.
 - **Late joiners** don't get the events from before they joined: they see those peds alive until the next
   event about them.
 

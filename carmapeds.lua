@@ -703,6 +703,9 @@ local function scoreEvent(c, credits, bannerDef)
   if credits > 0 then emit(events.score(clockT, c.sid, credits, bannerDef and bannerDef.index)) end
 end
 
+local MAX_CLOCK = 1e9  -- ms (11 days): session clocks beyond this aren't real
+local wasReplaying = false
+
 local function updateImpacts(c)
   if not c.impact then return end
   local dv = c.impact.dv
@@ -1010,18 +1013,31 @@ function script.update(dt)
 
   -- the clock
   replaying = sim.isReplayActive
+  local raw
   if replaying then
     if not replayStream or replayStream.clock == 0 then return end
-    clockT = replayStream.clock
+    raw = replayStream.clock
   else
+    raw = -sim.timeToSessionStart
+  end
+  -- while AC loads or restarts a session the clock can read infinite or absurd: skip those frames (an infinite
+  -- clock made the catch-up loop below endless, freezing the game)
+  if raw ~= raw or math.abs(raw) > MAX_CLOCK then return end
+  if not replaying then
     if sim.currentSessionIndex ~= sessionIndex then
       -- a new session: a fresh start
       sessionIndex = sim.currentSessionIndex
       eventLog = events.newLog()
       simT = nil
+    elseif simT and raw < simT - 1000 and not wasReplaying then
+      -- the live clock went back: the session was restarted. A fresh start too (else the old run's kills would
+      -- happen again on the same schedule)
+      eventLog = events.newLog()
+      simT = nil
     end
-    clockT = -sim.timeToSessionStart
   end
+  wasReplaying = replaying
+  clockT = raw
   nowMs = clockT
   if sim.isPaused and not replaying then return end
 
