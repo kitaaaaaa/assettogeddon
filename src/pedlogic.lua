@@ -6,9 +6,11 @@
 -- (1 world unit = WORLD_SCALE = 6.9 m) so the original formulas and thresholds apply unchanged.
 -- C1 pedestrians follow paths placed on each track; here each ped gets a generated one (paths.lua). Calm peds
 -- move along it as a pure function of session time (schedule.lua), the same on every client and in replays;
--- scared ones run along it and turn back from danger as in C1, and get a new anchor when they calm down.
+-- scared ones run away from the danger (not along the path as in C1: the generated ones are short) and get a
+-- new path where they calm down.
 local paths = require('src/paths')
 local schedule = require('src/schedule')
+local rng = require('src/rng')
 local M = {}
 
 local U = 6.9                -- metres per C1 world unit
@@ -83,8 +85,24 @@ function M.new(def, id, path, seed, now)
     collidedLastTime = false, flipped = false, killer = nil, deathTime = nil,
   }
   M.placeOnPath(ped)
+  -- its own path, to come back to when it respawns, and the direction of its first leg (new paths are laid
+  -- out along and across it)
+  ped.homePath = path
+  local _, _, _, fx, fz = paths.at(path, 0)
+  ped.homeFwdX, ped.homeFwdZ = fx, fz
   M.changeActionTo(ped, stand, true, now)
   return ped
+end
+
+-- A ped calmed down at (x, y, z) at time t: it gets a new path from there (generated with a seed from its id
+-- and t, so every client given the same place and time builds the same one) and walks it from the start.
+function M.settleHere(ped, x, y, z, t, ray)
+  local r = rng.new(rng.hash(ped.id .. ':' .. math.floor(t)))
+  ped.path = paths.generate(r, ray, x, y, z, ped.homeFwdX or 0, ped.homeFwdZ or 1)
+  ped.anchor = {t0 = math.floor(t), s0 = 0, dir0 = 1}
+  ped.s, ped.pathDir = 0, 1
+  ped.scared, ped.calmSince, ped.fleeX, ped.fleeZ = false, nil, nil, nil
+  M.placeOnPath(ped)
 end
 
 -- Puts the ped where its path position says (no raycasts: the path has its ground heights).
@@ -97,6 +115,8 @@ end
 -- Back alive at its path's starting point, calm, anchored at `now` (respawn; the same on every client).
 function M.respawn(ped, now)
   local d = ped.def
+  ped.path = ped.homePath or ped.path
+  ped.fleeX, ped.fleeZ = nil, nil
   ped.s, ped.pathDir = ped.initialS, ped.initialDir
   ped.anchor = {t0 = now, s0 = ped.initialS, dir0 = ped.initialDir}
   ped.scared, ped.calmSince = false, nil
@@ -322,6 +342,9 @@ local function wallAhead(ray, ped, dx, dz, dist)
   return ray(ped.x, ped.y + 0.4, ped.z, dx / l, 0, dz / l, dist) ~= -1
 end
 
+-- directions a fleeing ped tries, in order: straight on, then turning further and further (radians)
+local FLEE_TURNS = {0, math.pi / 4, -math.pi / 4, math.pi / 2, -math.pi / 2, 3 * math.pi / 4, -3 * math.pi / 4}
+
 function M.mungePath(ped, danger, dX, dZ, dtMs, ray, now)
   local d = ped.def
   local oldY = ped.y
@@ -332,13 +355,31 @@ function M.mungePath(ped, danger, dX, dZ, dtMs, ray, now)
       local terminal = ped.doneInitial and a.loopingSpeed or a.initialSpeed
       if ped.speed < terminal then ped.speed = ped.speed + dtMs * d.acceleration end
       if ped.speed > terminal then ped.speed = terminal end
-      if danger ~= 0 and ped.dirX * dX + ped.dirZ * dZ > 0 then ped.pathDir = -ped.pathDir end
-      local s = ped.s + ped.pathDir * dtMs * ped.speed * U
-      if s <= 0 or s >= ped.path.length then  -- end of the path: turn back (C1 reverses its instructions)
-        s = math.max(0, math.min(ped.path.length, s))
-        ped.pathDir = -ped.pathDir
+      -- not C1 (which runs them along their path, short ones here, so they got stuck turning back at its ends):
+      -- straight away from the danger, round walls, kerbs and drops
+      if danger ~= 0 then
+        local l = math.sqrt(dX * dX + dZ * dZ)
+        if l > 0 then ped.fleeX, ped.fleeZ = -dX / l, -dZ / l end
       end
-      ped.s = s
+      if not ped.fleeX then ped.fleeX, ped.fleeZ = ped.dirX, ped.dirZ end
+      local step = dtMs * ped.speed * U
+      if step > 0 then
+        local fx, fz = ped.fleeX, ped.fleeZ
+        for _, turn in ipairs(FLEE_TURNS) do
+          local c, sn = math.cos(turn), math.sin(turn)
+          local dx, dz = fx * c - fz * sn, fx * sn + fz * c
+          if not wallAhead(ray, ped, dx, dz, step + 0.3) then
+            local nx, nz = ped.x + dx * step, ped.z + dz * step
+            local gy = groundBelow(ray, nx, ped.y + STEP_UP, nz, STEP_UP * 2)
+            if gy and math.abs(gy - ped.y) < STEP_UP then
+              ped.x, ped.y, ped.z, ped.groundY = nx, gy, nz, gy
+              ped.dirX, ped.dirZ = dx, dz
+              if turn ~= 0 then ped.fleeX, ped.fleeZ = dx, dz end  -- follows the wall it met
+              break
+            end
+          end
+        end
+      end
     else
       -- calm: the schedule says where (same everywhere)
       local s, dir, walking = schedule.calm(ped, now)
@@ -353,8 +394,8 @@ function M.mungePath(ped, danger, dX, dZ, dtMs, ray, now)
       if ped.flagman and now >= 0 and #d.actions >= 8 then want = 7 end
       if want ~= ped.action then M.changeActionTo(ped, want, true, now) end
       ped.speed = walking and ped.walkSpeed / U or 0
+      M.placeOnPath(ped)
     end
-    M.placeOnPath(ped)
   end
   if ped.carriedBy then return end
   -- momentum of a thrown or dropped ped (not in C1): slides until friction stops it, stops at walls,
@@ -666,8 +707,7 @@ function M.update(ped, ctx)
       if danger == 0 and a and a.dangerLevel == 0 then
         ped.calmSince = ped.calmSince or now
         if now - ped.calmSince >= 3000 then
-          ped.scared, ped.calmSince = false, nil
-          ped.anchor = {t0 = now, s0 = ped.s, dir0 = ped.pathDir}
+          -- the caller settles it (settleHere) where the deciding client says
           event = 'calm'
         end
       else

@@ -169,6 +169,39 @@ p7.carriedBy, p7.carrierVx, p7.carrierVz = 9, 10, 0
 pedlogic.detach(p7)
 check(p7.vx > 0 and p7.midAir and not p7.carriedBy, 'released corpse keeps momentum')
 
+-- fleeing along the track: a ped whose (short) path runs along the track, a car coming down the track at it.
+-- It used to reach its path's end and turn back towards the car, stuck in place; now it runs on, clear of it.
+do
+  local p = {x = {}, y = {}, z = {}, s = {}}
+  for i = 1, 5 do p.x[i], p.y[i], p.z[i], p.s[i] = 200, 0, 300 + (i - 1) * 1.5, (i - 1) * 1.5 end  -- 6 m along z
+  p.n, p.length = 5, 6
+  local f = pedlogic.new(def, 901, p, 500, 0)
+  local z0 = f.z
+  local car = {index = 0, x = 200, y = 0, z = z0 - 40, dirX = 0, dirZ = 1, vx = 0, vz = 6, speed = 6, human = true,
+    halfW = 1, halfL = 2.2, halfH = 0.7}
+  local t = 0
+  for _ = 1, 500 do  -- 8 s: the car closes in at 6 m/s, slower than the ped runs
+    t = t + 16
+    car.z = car.z + 6 * 0.016
+    pedlogic.update(f, {now = t, dtMs = 16, cars = {car}, camX = 200, camZ = car.z - 6, ray = flat})
+  end
+  check(f.scared, 'fleeing ped is scared')
+  check(f.z - z0 > 8, ('fleeing ped runs on past its path (%.1f m from the start, path is 6 m)'):format(f.z - z0))
+end
+
+-- a ped that calmed down gets a new path from where it stopped: the same for the same place and time
+do
+  local a = pedlogic.new(def, 902, straightPath(300, 0), 500, 0)
+  local b = pedlogic.new(def, 902, straightPath(300, 0), 500, 0)
+  pedlogic.settleHere(a, 310.25, 0, 20.5, 64000, flat)
+  pedlogic.settleHere(b, 310.25, 0, 20.5, 64000, flat)
+  local same = a.path.n == b.path.n
+  for i = 1, a.path.n do if a.path.x[i] ~= b.path.x[i] or a.path.z[i] ~= b.path.z[i] then same = false end end
+  check(same and a.path.x[1] == 310.25 and a.x == 310.25 and not a.scared, 'settling: a new path from the spot, the same everywhere')
+  pedlogic.respawn(a, 70000)
+  check(a.path == a.homePath, 'respawn: back on its own path')
+end
+
 -- a standing ped's idle animation (variable rate, frame and mirror image) plays only near the camera
 do
   local idleDef = setmetatable({sequences = {}}, {__index = def})

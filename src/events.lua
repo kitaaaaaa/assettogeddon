@@ -8,7 +8,7 @@
 --           b: spin period (ms); c: impact (C1 units/ms * 1e5); d, e: where it hit the car (cm, car space x/z)
 --           if carried, else the car's velocity (cm/s, world x/z); f: banner index + 1 (0 = none)
 --   CORPSE  x, y, z: final resting place of the ped's corpse
---   ANCHOR  n: place on the path (mm); a: direction (+1/-1). A ped calmed down and walks its path from there.
+--   ANCHOR  x, y, z: where a ped calmed down (cm). It gets a new path from there (pedlogic.settleHere).
 --   SCORE   n: credits; f: banner index + 1 (cunning stunt, piledriver)
 -- Online messages carry 4 records (148 bytes, under the 175-byte limit of the original server); replay frames
 -- keep the last 6 in a ring.
@@ -79,9 +79,9 @@ function M.corpse(t, pedId, carSid, x, y, z)
     a = 0, b = 0, c = 0, d = 0, e = 0, f = 0}
 end
 
-function M.anchor(t, pedId, carSid, s, dir)
-  return {kind = M.ANCHOR, car = carSid, ped = pedId, t = math.floor(t), x = 0, y = 0, z = 0,
-    n = math.floor(s * 1000 + 0.5), a = dir, b = 0, c = 0, d = 0, e = 0, f = 0}
+function M.anchor(t, pedId, carSid, x, y, z)
+  return {kind = M.ANCHOR, car = carSid, ped = pedId, t = math.floor(t), x = cm(x), y = cm(y), z = cm(z),
+    n = 0, a = 0, b = 0, c = 0, d = 0, e = 0, f = 0}
 end
 
 function M.score(t, carSid, credits, bannerIndex)

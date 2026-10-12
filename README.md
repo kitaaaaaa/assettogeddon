@@ -20,7 +20,7 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 ## What it does
 
 - **Pedestrians**: a few hundred (adjustable) on random spots: half on the track and just beside it, half anywhere
-  on the surfaces cars can touch (grass, run-off, verges...) within 50 m of it, where the ground is flat enough; using every
+  on the surfaces cars can touch (grass, run-off, verges...) within 150 m of it, where the ground is flat enough; using every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
   with the rest.
 - **Grid girls**: ped 19 (`RID.PIX`), the flagman's counterpart, is never placed at random. Up to 8 of her stand
@@ -38,7 +38,9 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   direction-dependent animation sequences and frame timing, sounds, gravity and fall damage. C1 peds walk along
   paths placed on each track; AC tracks have none, so each ped gets a generated one (a few straight legs over
   open ground, kept clear of walls, kerbs and drops). Calm peds walk theirs back and forth with pauses;
-  frightened ones run along it and turn back when heading into danger, as in C1.
+  frightened ones run straight away from the danger, turning aside for walls, kerbs and drops (C1 runs them along
+  their path, but the generated ones are short, so they got stuck turning back at the ends). Where a frightened
+  ped calms down, it gets a new path.
 - **Hits**: any car (player, AI or other drivers) hitting a ped kills it, as in C1: a swept box test so fast
   cars don't pass through. Slow hits carry the ped on the car for a moment, fast ones throw it in the air, and
   the gibs fly. A first zero-speed touch turns the ped around; still touching on the next frame kills it.
@@ -91,7 +93,7 @@ Every client running the app sees the same peds, and replays show the same kills
   32 ms steps.
 - **Everything a car does to a ped is decided once**, by the client of the player driving it, and sent to
   the others as an event: kills (with how the ped flew, spun or exploded, and the credits and bonus), where
-  each corpse came to rest, where a frightened ped calmed down, and stunt and piledriver scores. Cars of
+  each corpse came to rest, where a frightened ped calmed down (its new path is built from there), and stunt and piledriver scores. Cars of
   players without the app, and AI cars, are decided by the client with the lowest session ID that runs it,
   whose ped count and respawn time also apply to everyone.
 - **On a standard server** (one message per 200 ms), events are packed 4 to a message and sent every 250 ms;

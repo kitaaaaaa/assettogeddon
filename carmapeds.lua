@@ -344,9 +344,9 @@ local function standable(x, y, z)
 end
 
 -- A random spot from the seeded generator r: half on the track (and just beside it), half anywhere on the
--- surfaces cars can touch (grass, run-off, car parks, verges...) within 50 m of it. Also returns the track
+-- surfaces cars can touch (grass, run-off, car parks, verges...) within 150 m of it. Also returns the track
 -- direction.
-local OFF_TRACK = 50
+local OFF_TRACK = 150
 local function randomSpot(r)
   for _ = 1, 30 do
     if splineAvailable() then
@@ -581,8 +581,8 @@ local function applyEvent(ev, own, quiet)
     if ped and not own then pedlogic.settleCorpse(ped, ev.x / 100, ev.y / 100, ev.z / 100, ev.t) end
   elseif ev.kind == events.ANCHOR then
     if ped and not own and not pedlogic.isDead(ped) then
-      ped.anchor = {t0 = ev.t, s0 = ev.n / 1000, dir0 = ev.a}
-      ped.scared, ped.calmSince, ped.waitingSince = false, nil, nil
+      pedlogic.settleHere(ped, ev.x / 100, ev.y / 100, ev.z / 100, ev.t, ray)
+      ped.waitingSince = nil
     end
   elseif ev.kind == events.SCORE then
     local s = scoreFor(ev.car)
@@ -841,18 +841,22 @@ local function tick(t)
       local ev = pedlogic.update(ped, ctx)
       -- calmed down: the deciding client sends where it now walks from
       if ev == 'calm' then
-        -- anchors travel in mm: use the same rounded value here, so this client and the others agree exactly
-        ped.anchor.s0 = math.floor(ped.anchor.s0 * 1000 + 0.5) / 1000
+        -- the place travels in cm: use the same rounded values here, so this client and the others agree exactly
+        local x = math.floor(ped.x * 100 + 0.5) / 100
+        local y = math.floor(ped.y * 100 + 0.5) / 100
+        local z = math.floor(ped.z * 100 + 0.5) / 100
         if not replaying and decidesFor(ped.scaredBy or mySid) then
-          emit(events.anchor(t, ped.id, ped.scaredBy or mySid, ped.anchor.s0, ped.anchor.dir0))
+          pedlogic.settleHere(ped, x, y, z, t, ray)
+          emit(events.anchor(t, ped.id, ped.scaredBy or mySid, x, y, z))
         else
           -- someone else decides where it calms down (or the replay has it): stay scared until their anchor
-          -- arrives, so a local guess can't overwrite it; after 10 s without one, keep the local anchor
+          -- arrives, so a local guess can't overwrite it; after 10 s without one, settle here
           ped.waitingSince = ped.waitingSince or t
           if t - ped.waitingSince < 10000 then
-            ped.scared, ped.calmSince = true, t
+            ped.calmSince = t
           else
             ped.waitingSince = nil
+            pedlogic.settleHere(ped, x, y, z, t, ray)
           end
         end
       end
@@ -899,7 +903,7 @@ local replayReadSeq
 
 local function openReplayStream()
   replayStream = ac.ReplayStream(events.layout(ac.StructItem, events.PER_REPLAY_FRAME, {
-    ac.StructItem.key('carmapeds.replay.v1'),
+    ac.StructItem.key('carmapeds.replay.v2'),
     clock = ac.StructItem.double(),
     seq = ac.StructItem.uint32(),
     seed = ac.StructItem.uint32(),
@@ -980,7 +984,7 @@ function script.update(dt)
   -- online: hellos, and the host's settings
   if online and not sendEvents then
     mySid = carSid(0)
-    sendEvents, sendEventsData = ac.OnlineEvent(events.layout(ac.StructItem, events.PER_MESSAGE, {ac.StructItem.key('carmapeds.events.v1')}),
+    sendEvents, sendEventsData = ac.OnlineEvent(events.layout(ac.StructItem, events.PER_MESSAGE, {ac.StructItem.key('carmapeds.events.v2')}),
       function(sender, msg)
         if sender and sender.index == 0 then return end  -- our own, back from the server
         for i = 0, events.PER_MESSAGE - 1 do
