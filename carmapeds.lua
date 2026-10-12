@@ -96,6 +96,7 @@ local function startLoading()
     for img in pairs(made) do img.rgba = nil end
     pedlogic.gibImages = d.gibs
     for _, w in ipairs(d.warnings) do log(w) end
+    for _, n in ipairs(d.notes) do log(n) end
     log(('loaded %d pedestrian types, %d images, %d sounds'):format(#d.peds, n, countKeys(d.sounds)))
     if #d.peds == 0 then
       local w = {}

@@ -52,7 +52,7 @@ function M.load(root, io, yield)
   yield = yield or function() end
   local data = M.findDataDir(root, io.exists)
   if not data then return nil, 'no DATA/PEDESTRN.TXT in "' .. tostring(root) .. '"' end
-  local out = {dataDir = data, warnings = {}, images = {}}
+  local out = {dataDir = data, warnings = {}, notes = {}, images = {}}
   local function warn(s) out.warnings[#out.warnings + 1] = s end
 
   local general = io.read(data .. '/GENERAL.TXT')
@@ -133,7 +133,8 @@ function M.load(root, io, yield)
     end
   end
   for _, p in ipairs(peds) do
-    -- a missing frame is just not drawn; only a ped with no images at all (or no animation) is left out
+    -- C1 refuses to load a ped with a missing frame (fatal error), so its data can have types no track uses
+    -- with frames missing (ref 19 in the original data): those are left out, noted in the log only
     local missing, found = {}, 0
     for _, s in ipairs(p.sequences) do
       for _, f in ipairs(s.frames) do
@@ -143,11 +144,11 @@ function M.load(root, io, yield)
         end
       end
     end
-    if #missing > 0 then
-      warn(('pedestrian %d: %d image(s) not found: %s'):format(p.ref, #missing, table.concat(missing, ' ', 1, math.min(#missing, 6))))
-    end
     if #p.sequences == 0 or #p.actions == 0 then warn(('pedestrian %d left out: no animation'):format(p.ref))
     elseif found == 0 then warn(('pedestrian %d left out: none of its images found'):format(p.ref))
+    elseif #missing > 0 then
+      out.notes[#out.notes + 1] = ('pedestrian %d left out (as C1 would): %d image(s) missing from the data: %s')
+        :format(p.ref, #missing, table.concat(missing, ' ', 1, math.min(#missing, 6)))
     else out.peds[#out.peds + 1] = p end
   end
 
