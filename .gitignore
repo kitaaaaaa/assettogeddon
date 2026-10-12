@@ -1,1 +1,3 @@
 tests/out.png
+# Carmageddon data is copied in by each user, never committed
+DATA/

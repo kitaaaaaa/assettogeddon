@@ -79,7 +79,7 @@ ui = {
   drawImage = function(tex, a, b) assert(tex and a.x and b.x) end,
   Alignment = {Start = 0, Center = 1, End = 2},
   text = function(s) assert(type(s) == 'string') end, textColored = function(s) assert(type(s) == 'string') end,
-  textWrapped = function(s) assert(type(s) == 'string') LAST_WRAPPED = s end,
+  textWrapped = function(s) assert(type(s) == 'string') WRAPPED = WRAPPED or {} WRAPPED[#WRAPPED + 1] = s end,
   pushStyleColor = function() end, popStyleColor = function() end, StyleColor = {Text = 0},
   separator = function() end, sameLine = function() end, button = function() return false end,
   inputText = function(label, v) return v end, slider = function(label, v) return v end, checkbox = function() return false end,
@@ -108,7 +108,7 @@ carsMock[0] = makeCar(0, 0, -900, 0)
 carsMock[1] = makeCar(1, 3, -950, 0)
 
 -- ---- run ---------------------------------------------------------------------------------------
-storage.c1Path = fakeRoot
+__dirname = fakeRoot  -- the app's own folder, holding the copied DATA
 storage.pedCount = 400
 dofile('carmapeds.lua')
 local frames = 0
@@ -123,8 +123,10 @@ local function frame()
 end
 for _ = 1, 400 do frame() end
 if os.getenv('EXPECT_ERROR') then
-  print('error shown: ' .. tostring(LAST_WRAPPED))
-  assert(LAST_WRAPPED and LAST_WRAPPED:find(os.getenv('EXPECT_ERROR'), 1, true), 'expected error message')
+  local shown
+  for _, w in ipairs(WRAPPED or {}) do if w:find(os.getenv('EXPECT_ERROR'), 1, true) then shown = w end end
+  print('error shown: ' .. tostring(shown))
+  assert(shown, 'expected error message')
   print('smoke test passed (error case)')
   return
 end

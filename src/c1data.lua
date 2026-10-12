@@ -20,7 +20,7 @@ M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX'
 -- Pixelmaps: the game looks in DATA/<resolution>/PIXELMAP, then DATA/PIXELMAP (loading.c LoadPixelmap).
 local PIXELMAP_DIRS = {'64X48X8/PIXELMAP/', '32X20X8/PIXELMAP/', 'PIXELMAP/'}
 
--- Finds the DATA folder from what the user picked: the game folder (containing DATA) or DATA itself.
+-- Finds the DATA folder: root/DATA, or root itself if it is the DATA folder.
 function M.findDataDir(root, exists)
   root = (root or ''):gsub('[/\\]+$', '')
   if root == '' then return nil end

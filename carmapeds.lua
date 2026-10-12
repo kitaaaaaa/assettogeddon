@@ -1,5 +1,5 @@
 -- Carmageddon pedestrians for Assetto Corsa (CSP Lua app).
--- Needs a Carmageddon 1 install: sprites, sounds and pedestrian data are read from its DATA folder.
+-- Needs Carmageddon 1's DATA folder copied into this app's folder: sprites, sounds and pedestrian data come from it.
 local c1data = require('src/c1data')
 local pedlogic = require('src/pedlogic')
 local scoring = require('src/scoring')
@@ -7,7 +7,6 @@ local png = require('src/png')
 local rng = require('src/rng')
 
 local settings = ac.storage{
-  c1Path = '',
   pedCount = 300,
   respawnSeconds = 120,
   volume = 1,
@@ -45,7 +44,6 @@ local function countKeys(t) local n = 0 for _ in pairs(t) do n = n + 1 end retur
 -- Loading
 local function startLoading()
   data, loadError, textures, peds = nil, nil, {}, {}
-  if settings.c1Path == '' then loadError = 'Set your Carmageddon folder in the settings.' return end
   loader = coroutine.create(function()
     local io_ = {
       exists = function(path) return io.fileExists(path) end,
@@ -69,8 +67,16 @@ local function startLoading()
       io_.lastError = why
       return nil
     end
-    local d, err = c1data.load(settings.c1Path, io_, coroutine.yield)
-    if not d then loadError = err log(err) return end
+    local d, err = c1data.load(__dirname, io_, coroutine.yield)
+    if not d then
+      if not io.fileExists(__dirname .. '/DATA/PEDESTRN.TXT') then
+        err = 'Copy the DATA folder from your Carmageddon 1 install into this app\'s folder ('
+          .. __dirname .. '\\DATA), then press Reload in the settings.'
+      end
+      loadError = err
+      log(err)
+      return
+    end
     local n = 0
     for name, img in pairs(d.images) do
       if img then
@@ -631,10 +637,8 @@ function script.windowMain(dt)
 end
 
 function script.windowSettings(dt)
-  ui.text('Carmageddon folder (the one containing DATA):')
-  local path = ui.inputText('e.g. C:\\Games\\Carmageddon', settings.c1Path, ui.InputTextFlags.Placeholder)
-  if path ~= settings.c1Path then settings.c1Path = path end
-  if ui.button('Load') then startLoading() end
+  ui.textWrapped('Carmageddon data is read from the DATA folder in this app\'s folder.')
+  if ui.button('Reload') then startLoading() end
   ui.sameLine()
   if ui.button('Respawn all') and data then populate() end
   ui.separator()

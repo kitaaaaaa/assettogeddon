@@ -4,16 +4,18 @@ A Custom Shaders Patch Lua app that fills any track with Carmageddon's pedestria
 sounds and behaviour, which scatter when a car comes at them and die when run over. Kills score credits with
 Carmageddon's own bonuses.
 
-**No Carmageddon files are included.** The app reads them from your own Carmageddon 1 install.
+**No Carmageddon files are included.** The app reads them from a copy of Carmageddon 1's `DATA` folder that
+you put in the app's own folder, so it always uses the original files, whatever mods your game install has.
 
 ## Install
 
 1. Copy the `carmapeds` folder to `assettocorsa\apps\lua\`.
-2. In a session, open the app ("Carmageddon Pedestrians") from the app bar.
-3. Open its settings (the gear on the app window), enter your Carmageddon folder (the one containing `DATA`,
-   e.g. `C:\GOG Games\Carmageddon` or the `CARMA` folder), and press **Load**.
+2. Copy the `DATA` folder from your Carmageddon 1 install (e.g. `C:\GOG Games\Carmageddon\DATA`, or
+   `CARMA\DATA`) into it, so you have `assettocorsa\apps\lua\carmapeds\DATA\PEDESTRN.TXT`.
+3. In a session, open the app ("Carmageddon Pedestrians") from the app bar. It loads the data by itself;
+   after changing the files, press **Reload** in its settings.
 
-Requires CSP 0.2.x. Tested so far only against a mock of the CSP API (see below).
+Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 
 ## What it does
 
