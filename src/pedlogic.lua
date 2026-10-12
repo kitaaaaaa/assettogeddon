@@ -4,8 +4,11 @@
 --
 -- Units: positions in metres, time in ms. Speeds that come from the game data stay in C1 world units per ms
 -- (1 world unit = WORLD_SCALE = 6.9 m) so the original formulas and thresholds apply unchanged.
--- C1 pedestrians follow paths placed on each track; AC tracks have none, so walking peds pick their own heading
--- (wander) where C1 would take the next path point, and turn away from danger where C1 reverses along the path.
+-- C1 pedestrians follow paths placed on each track; here each ped gets a generated one (paths.lua). Calm peds
+-- move along it as a pure function of session time (schedule.lua), the same on every client and in replays;
+-- scared ones run along it and turn back from danger as in C1, and get a new anchor when they calm down.
+local paths = require('src/paths')
+local schedule = require('src/schedule')
 local M = {}
 
 local U = 6.9                -- metres per C1 world unit
@@ -49,19 +52,60 @@ local function isDeadAction(ped, a)
 end
 function M.isDead(ped) return ped.hitPoints < 0 or isDeadAction(ped, ped.action) end
 
-function M.new(def, x, y, z, now)
-  local heading = frand(0, 2 * math.pi)
+-- Calm actions (danger level 0): the one used for standing, and the fastest walking one (nil if none).
+local function calmActions(def)
+  local stand, walk, walkSpeed = 0, nil, 0
+  for i = #def.actions, 1, -1 do
+    local a = def.actions[i]
+    if a.dangerLevel == 0 then
+      if a.loopingSpeed > walkSpeed then walk, walkSpeed = i - 1, a.loopingSpeed
+      elseif a.loopingSpeed == 0 then stand = i - 1 end
+    end
+  end
+  return stand, walk, walkSpeed
+end
+
+-- id: stable number of the ped (same on every client); path: from paths.generate; seed: per-ped number for
+-- its deterministic schedule (pause length, starting place and direction).
+function M.new(def, id, path, seed, now)
+  local stand, walk, walkSpeed = calmActions(def)
+  local s0 = (seed % 1000) / 1000 * path.length
+  local dir0 = (math.floor(seed / 1000) % 2 == 0) and 1 or -1
   local ped = {
-    def = def, x = x, y = y, z = z, groundY = y,
-    dirX = math.sin(heading), dirZ = math.cos(heading),
+    def = def, id = id, path = path, s = s0, pathDir = dir0,
+    initialS = s0, initialDir = dir0, anchor = {t0 = now, s0 = s0, dir0 = dir0},
+    calmStand = stand, calmWalk = walk, walkSpeed = walkSpeed * U, pause = 2000 + math.floor(seed / 2000) % 6000,
+    scared = false, calmSince = nil,
     speed = 0, action = -1, sequence = 0, frame = 0, doneInitial = false, lastFrame = 0,
     lastActionChange = now, actionMode = -1, hitPoints = def.hitPoints,
     midAir = false, fallingSpeed = 0, spinPeriod = 0, jump = 0, offsetY = 0, vx = 0, vz = 0,
     carToPed = 0, carriedBy = nil, lastSound = nil, lastSoundAction = -1, lastSoundMake = -1e9,
-    wanderUntil = 0, collidedLastTime = false, flipped = false, killer = nil, deathTime = nil,
+    collidedLastTime = false, flipped = false, killer = nil, deathTime = nil,
   }
-  M.changeActionTo(ped, 0, true, now)
+  M.placeOnPath(ped)
+  M.changeActionTo(ped, stand, true, now)
   return ped
+end
+
+-- Puts the ped where its path position says (no raycasts: the path has its ground heights).
+function M.placeOnPath(ped)
+  local x, y, z, dx, dz = paths.at(ped.path, ped.s)
+  ped.x, ped.y, ped.z, ped.groundY = x, y, z, y
+  ped.dirX, ped.dirZ = dx * ped.pathDir, dz * ped.pathDir
+end
+
+-- Back alive at its path's starting point, calm, anchored at `now` (respawn; the same on every client).
+function M.respawn(ped, now)
+  local d = ped.def
+  ped.s, ped.pathDir = ped.initialS, ped.initialDir
+  ped.anchor = {t0 = now, s0 = ped.initialS, dir0 = ped.initialDir}
+  ped.scared, ped.calmSince = false, nil
+  ped.hitPoints, ped.speed, ped.action, ped.actionMode = d.hitPoints, 0, -1, -1
+  ped.midAir, ped.fallingSpeed, ped.spinPeriod, ped.jump, ped.offsetY, ped.vx, ped.vz = false, 0, 0, 0, 0, 0, 0
+  ped.carriedBy, ped.carriedLocal, ped.killer, ped.deathTime, ped.satUpon, ped.collidedLastTime = nil, nil, nil, nil, false, false
+  ped.corpseSettled, ped.fallingSoundDone = nil, nil
+  M.placeOnPath(ped)
+  M.changeActionTo(ped, ped.calmStand, true, now)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -105,7 +149,7 @@ function M.dangerLevel(ped, cars)
       if diff < 30 or speed == 0 then
         local danger = (math.abs(speed) + 0.00003) * (speed ~= 0 and (30 - diff + 5) or 5) / dist2 * 400
         if danger > most then
-          most, dX, dZ = danger, car.x - ped.x, car.z - ped.z
+          most, dX, dZ, ped.frightener = danger, car.x - ped.x, car.z - ped.z, car
         end
       end
     end
@@ -141,11 +185,6 @@ function M.mungeAction(ped, danger, now)
     for i = first, last do
       value = value - d.actions[i].percentageChance
       if value < 0 then choice = i break end
-    end
-    -- a fresh calm action is a fresh stroll: pick a new heading (C1 would take its next path point)
-    if most == 0 and choice - 1 ~= ped.action then
-      local h = frand(0, 2 * math.pi)
-      ped.dirX, ped.dirZ = math.sin(h), math.cos(h)
     end
     M.changeActionTo(ped, choice - 1, true, now)
     return true
@@ -275,31 +314,31 @@ end
 function M.mungePath(ped, danger, dX, dZ, dtMs, ray, now)
   local d = ped.def
   local oldY = ped.y
-  if not ped.carriedBy and not isDeadAction(ped, ped.action) then
-    local a = d.actions[ped.action + 1]
-    local terminal = ped.doneInitial and a.loopingSpeed or a.initialSpeed
-    if ped.speed < terminal then ped.speed = ped.speed + dtMs * d.acceleration end
-    if ped.speed > terminal then ped.speed = terminal end
-    -- running into danger: turn away from it (C1 reverses along its path)
-    if danger ~= 0 and ped.dirX * dX + ped.dirZ * dZ > 0 then
-      local len = math.sqrt(dX * dX + dZ * dZ)
-      if len > 0 then
-        local h = math.atan2(-dX / len, -dZ / len) + frand(-0.7, 0.7)
-        ped.dirX, ped.dirZ = math.sin(h), math.cos(h)
+  if not ped.carriedBy and not isDeadAction(ped, ped.action) and not ped.midAir then
+    if ped.scared then
+      -- C1 MungePedestrianPath: speed towards the action's, back along the path if heading into danger
+      local a = d.actions[ped.action + 1]
+      local terminal = ped.doneInitial and a.loopingSpeed or a.initialSpeed
+      if ped.speed < terminal then ped.speed = ped.speed + dtMs * d.acceleration end
+      if ped.speed > terminal then ped.speed = terminal end
+      if danger ~= 0 and ped.dirX * dX + ped.dirZ * dZ > 0 then ped.pathDir = -ped.pathDir end
+      local s = ped.s + ped.pathDir * dtMs * ped.speed * U
+      if s <= 0 or s >= ped.path.length then  -- end of the path: turn back (C1 reverses its instructions)
+        s = math.max(0, math.min(ped.path.length, s))
+        ped.pathDir = -ped.pathDir
       end
+      ped.s = s
+    else
+      -- calm: the schedule says where (same everywhere)
+      local s, dir, walking = schedule.calm(ped, now)
+      ped.s, ped.pathDir = s, dir
+      local want = walking and ped.calmWalk or ped.calmStand
+      -- the flagman waves his flag from the start of the session (C1: when the countdown ends)
+      if ped.flagman and now >= 0 and #d.actions >= 8 then want = 7 end
+      if want ~= ped.action then M.changeActionTo(ped, want, true, now) end
+      ped.speed = walking and ped.walkSpeed / U or 0
     end
-    if ped.speed > 0 and not ped.midAir then
-      local step = dtMs * ped.speed * U
-      local nx, nz = ped.x + ped.dirX * step, ped.z + ped.dirZ * step
-      local gy = not wallAhead(ray, ped, ped.dirX, ped.dirZ, step + 0.3) and groundBelow(ray, nx, ped.y + STEP_UP, nz, STEP_UP * 2)
-      if gy and math.abs(gy - ped.groundY) < STEP_UP then
-        ped.x, ped.z, ped.y, ped.groundY = nx, nz, gy, gy
-      else
-        -- wall, kerb or drop ahead: pick another way
-        local h = frand(0, 2 * math.pi)
-        ped.dirX, ped.dirZ = math.sin(h), math.cos(h)
-      end
-    end
+    M.placeOnPath(ped)
   end
   if ped.carriedBy then return end
   -- momentum of a thrown or dropped ped (not in C1): slides until friction stops it, stops at walls,
@@ -366,14 +405,15 @@ M.gibs = {}
 M.gibImages = {[0] = {}, {}, {}, {}}
 M.MAX_GIBS = 120
 
--- Returns true if the ped exploded.
-function M.burst(ped, splat, allowExplosion, now)
+-- explode: whether a hit fast enough to explode the ped does (C1: 50% when allowed). The caller decides it, so
+-- the client deciding a kill can send it to the others. Returns true if the ped exploded.
+function M.burst(ped, splat, explode, now)
   local exploded = false
   local maxSize = 3
   for i = 2, 4 do
     if MIN_GIB_SPEEDS[i] <= splat then maxSize = i - 1 break end
   end
-  if maxSize == 1 and (not allowExplosion or not chance(50)) then maxSize = 2 end
+  if maxSize == 1 and not explode then maxSize = 2 end
   local gibCount = math.min(math.floor(splat * 10000), 15)
   if maxSize == 1 and #M.gibImages[0] > 0 then
     if #ped.def.explodingSounds > 0 then
@@ -497,50 +537,83 @@ function M.bloodyWheels(ped, car)
   return squish
 end
 
--- Hits a live ped (CheckPedestrianDeathScenario). Returns a kill record for scoring, or nil.
--- hit: from carHitTest; projectile: true for 'Nice shot, sir!' kills by a knocked object.
+-- Hits a live ped (CheckPedestrianDeathScenario): decides the kill (the random parts: thrown or carried,
+-- spin, explosion) and applies it. Only the client that owns the car does this; the others apply the same
+-- kill from its event with applyKill. hit: from carHitTest; projectile: a 'Nice shot, sir!' object.
+-- Returns the kill (see applyKill) or nil.
 function M.hit(ped, car, hit, now, projectile)
-  local d = ped.def
   local impact = math.abs(car.speed) / U / 1000  -- world units per ms
   -- a ped running ahead of a slower car is just bumped (C1 sets the impact speed to zero)
   if not projectile and (ped.dirX * car.vx + ped.dirZ * car.vz) > 0 and impact < math.abs(ped.speed) then impact = 0 end
   -- first frame of a zero-speed contact: the ped turns back; still touching on the next frame: dead (as C1).
   -- The caller resets ped.collidedLastTime on frames without contact.
   if impact == 0 and not ped.collidedLastTime and not projectile then
-    local h = math.atan2(-ped.dirX, -ped.dirZ)
-    ped.dirX, ped.dirZ = math.sin(h), math.cos(h)
+    ped.pathDir = -ped.pathDir
+    ped.scared = true
     ped.collidedLastTime = true
     return nil
   end
   ped.collidedLastTime = true
-  ped.hitPoints = -1
-  ped.killer = car.index
-  ped.deathTime = now
-  ped.jump = math.min(impact * 30, 0.4) * U
-  local tossing = false
-  if not projectile and chance(50) and impact >= 0.0035 then
-    tossing = true
-    ped.midAir = true
-    ped.fallingSpeed = ped.fallingSpeed - impact * 0.02
-    if ped.fallingSpeed > -0.001 then ped.fallingSpeed = -0.001 end
-    ped.y = ped.y + impact * 15 * U
-    -- not in C1 (tossed peds only go up): thrown along with some of the car's speed
-    ped.vx, ped.vz = car.vx * MOMENTUM / 1000, car.vz * MOMENTUM / 1000
-  elseif projectile then
-    ped.vx, ped.vz = car.vx * MOMENTUM / 1000, car.vz * MOMENTUM / 1000
-  else
-    ped.carriedBy = car.index  -- rides on the car until its death animation's first part is over
-    ped.carriedLocal = {hit.lx, 0, hit.lz}
-  end
+  local tossing = not projectile and chance(50) and impact >= 0.0035
+  local spin = 0
   if (impact >= 0.004 and chance(50)) or tossing then
     local p = tossing and frand(100, 300) or frand(100, 2000)
-    ped.spinPeriod = chance(50) and p or -p
-  else
-    ped.spinPeriod = 0
+    spin = chance(50) and p or -p
   end
-  M.changeActionTo(ped, tossing and d.fatalGroundImpactAction or d.fatalCarImpactAction, true, now)
-  local exploded = M.burst(ped, impact, true, now)
-  return {ped = ped, car = car, impact = impact, exploded = exploded, side = hit and hit.side, tossing = tossing}
+  local kill = {
+    impact = impact, tossing = tossing, projectile = projectile, spin = math.floor(spin + 0.5),
+    exploded = impact >= MIN_GIB_SPEEDS[2] and chance(50),
+    carried = not tossing and not projectile, lx = hit and hit.lx or 0, lz = hit and hit.lz or 0,
+    vx = car.vx, vz = car.vz, x = ped.x, y = ped.y, z = ped.z, side = hit and hit.side,
+  }
+  M.applyKill(ped, kill, car.index, now)
+  return kill
+end
+
+-- Applies a decided kill: the ped dies where the kill says, thrown, carried by the car (index carIndex, or nil
+-- if it isn't known here) or knocked by an object, as decided.
+function M.applyKill(ped, k, carIndex, now)
+  local d = ped.def
+  ped.x, ped.y, ped.z, ped.groundY = k.x, k.y, k.z, k.y
+  ped.hitPoints = -1
+  ped.killer = carIndex
+  ped.deathTime = now
+  ped.scared = false
+  ped.jump = math.min(k.impact * 30, 0.4) * U
+  ped.carriedBy, ped.carriedLocal = nil, nil
+  if k.tossing then
+    ped.midAir = true
+    ped.fallingSpeed = ped.fallingSpeed - k.impact * 0.02
+    if ped.fallingSpeed > -0.001 then ped.fallingSpeed = -0.001 end
+    ped.y = ped.y + k.impact * 15 * U
+    -- not in C1 (tossed peds only go up): thrown along with some of the car's speed
+    ped.vx, ped.vz = k.vx * MOMENTUM / 1000, k.vz * MOMENTUM / 1000
+  elseif k.projectile or not carIndex then
+    ped.vx, ped.vz = k.vx * MOMENTUM / 1000, k.vz * MOMENTUM / 1000
+  else
+    ped.carriedBy = carIndex  -- rides on the car until its death animation's first part is over
+    ped.carriedLocal = {k.lx, 0, k.lz}
+  end
+  ped.spinPeriod = k.spin
+  M.changeActionTo(ped, k.tossing and d.fatalGroundImpactAction or d.fatalCarImpactAction, true, now)
+  M.burst(ped, k.impact, k.exploded, now)
+end
+
+-- A dead ped that has stopped moving (its final resting place, sent to the others so corpses match).
+function M.corpseSettled(ped)
+  return M.isDead(ped) and not ped.carriedBy and not ped.midAir and ped.fallingSpeed == 0
+    and ped.vx == 0 and ped.vz == 0 and ped.doneInitial
+end
+
+-- Puts a dead ped at its final resting place (from the deciding client), lying still.
+function M.settleCorpse(ped, x, y, z, now)
+  local d = ped.def
+  if not M.isDead(ped) then ped.hitPoints = -1 end
+  if not isDeadAction(ped, ped.action) then M.changeActionTo(ped, d.fatalCarImpactAction, true, now) end
+  ped.carriedBy, ped.carriedLocal = nil, nil
+  ped.x, ped.y, ped.z, ped.groundY = x, y, z, y
+  ped.midAir, ped.fallingSpeed, ped.vx, ped.vz, ped.spinPeriod, ped.offsetY = false, 0, 0, 0, 0, 0
+  ped.corpseSettled = true
 end
 
 -- Per-frame update of one ped (DoPedestrian). ctx: {now, dtMs, cars, camX, camZ, ray}
@@ -551,20 +624,43 @@ function M.update(ped, ctx)
   local seq = d.sequences[ped.sequence + 1]
   if ped.doneInitial and seq and #seq.frames == seq.loopingFrameStart then ped.doneInitial = false end
   ped.carToPed = atan2deg(ped.x - ctx.camX, ped.z - ctx.camZ)
-  local oldX, oldY, oldZ = ped.x, ped.y, ped.z
   local danger, dX, dZ = 0, 0, 0
   local changed = false
-  if not isDeadAction(ped, ped.action) then
+  local event
+  if not isDeadAction(ped, ped.action) and not ped.carriedBy then
+    ped.frightener = nil
     danger, dX, dZ = M.dangerLevel(ped, ctx.cars)
-    changed = M.mungeAction(ped, danger, now)
+    if not ped.scared then
+      -- calm peds only leave their schedule for an action with a danger level (C1 picks it as usual)
+      for i = 1, #d.actions do
+        local a = d.actions[i]
+        if a.dangerLevel > 0 and a.dangerLevel < 999 and a.dangerLevel <= danger then
+          ped.scared, ped.calmSince = true, nil
+          ped.lastActionChange = now - 1e9  -- no reaction-time wait for the first reaction
+          break
+        end
+      end
+    end
+    if ped.scared then
+      changed = M.mungeAction(ped, danger, now)
+      if ped.frightener then ped.scaredBy = ped.frightener.sid end
+      -- calm again (danger gone, doing a calm action) for 3 s: back on a schedule, anchored here
+      local a = d.actions[ped.action + 1]
+      if danger == 0 and a and a.dangerLevel == 0 then
+        ped.calmSince = ped.calmSince or now
+        if now - ped.calmSince >= 3000 then
+          ped.scared, ped.calmSince = false, nil
+          ped.anchor = {t0 = now, s0 = ped.s, dir0 = ped.pathDir}
+          event = 'calm'
+        end
+      else
+        ped.calmSince = nil
+      end
+    end
   end
   M.mungeSequence(ped, changed)
-  local event = M.mungeFrames(ped, now)
+  event = M.mungeFrames(ped, now) or event
   M.mungePath(ped, danger, dX, dZ, ctx.dtMs, ctx.ray, now)
-  if oldX == ped.x and oldY == ped.y and oldZ == ped.z and not ped.carriedBy and ped.doneInitial then
-    seq = d.sequences[ped.sequence + 1]
-    if seq and seq.rate == 1 then M.changeActionTo(ped, 0, false, now) end
-  end
   -- current frame and sprite size
   seq = d.sequences[ped.sequence + 1]
   local frame = seq and seq.frames[math.max(ped.frame, 0) + 1]

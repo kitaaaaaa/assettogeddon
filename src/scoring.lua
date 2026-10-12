@@ -16,6 +16,11 @@ M.BANNER = {
   cunningStunt = {index = 9, image = 'POLITE.PIX', text = 'CUNNING STUNT BONUS'},
 }
 
+function M.bannerByIndex(index)
+  for _, b in pairs(M.BANNER) do if b.index == index then return b end end
+  return nil
+end
+
 -- Cunning stunt (dethrace car.c): the car went over (upside down at some point) and is back on its wheels for
 -- half a second; at most one every 10 s. car: {upY (up . world up), onGround, teleported}.
 M.STUNT_CREDITS = 1000  -- replaced by GENERAL.TXT's value (middle skill level)

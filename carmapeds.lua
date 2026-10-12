@@ -5,6 +5,8 @@ local pedlogic = require('src/pedlogic')
 local scoring = require('src/scoring')
 local png = require('src/png')
 local rng = require('src/rng')
+local paths = require('src/paths')
+local events = require('src/events')
 
 local settings = ac.storage{
   pedCount = 300,
@@ -27,15 +29,15 @@ local data          -- loaded C1 data (c1data.load)
 local loadError     -- string
 local loader        -- coroutine while loading
 local textures = {} -- image name -> texture (ui.decodeImage)
-local peds = {}
-local spawnRandom, behaviourRandom
-local cars = {}     -- per car index: {state, prev..., wheels = {...}}
-local bloodTrails = {} -- {x1,y1,z1, x2,y2,z2, nx,ny,nz?, time}
-local projectiles = {} -- knocked objects for 'Nice shot, sir!': {car, x, y, z, vx, vz, until}
-local banner = nil     -- {def, time, credits}
+local peds = {}     -- every ped; ids are the same on every client
+local pedsById = {}
+local cars = {}     -- per local car index: {state, prev..., wheels = {...}}
+local bloodTrails = {} -- {x1,y1,z1, x2,y2,z2, time}
+local projectiles = {} -- knocked objects for 'Nice shot, sir!'
+local banner = nil     -- {def, time}
 local popups = {}      -- {text, time}
-local nowMs = 0
 local seed = 1
+local sendEventsData   -- online message buffer (set up once online)
 
 local function log(...) ac.log('[carmapeds]', ...) end
 local function countKeys(t) local n = 0 for _ in pairs(t) do n = n + 1 end return n end
@@ -116,110 +118,13 @@ local function ray(x, y, z, dx, dy, dz, len)
 end
 -- Ground height under (x, z), searching from a little above y. nil if no track surface there.
 local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z, 6) end
-
-local hasSpline
-local function splineAvailable()
-  if hasSpline == nil then
-    local a, b = ac.trackProgressToWorldCoordinate(0), ac.trackProgressToWorldCoordinate(0.5)
-    hasSpline = a:distanceSquared(b) > 1
-  end
-  return hasSpline
-end
-
--- A random spot on (or just beside) the track, away from cars.
-local function randomSpot(r)
-  for _ = 1, 30 do
-    local x, y, z
-    if splineAvailable() then
-      local p = r()
-      local c = ac.trackProgressToWorldCoordinate(p)
-      local n = ac.trackProgressToWorldCoordinate((p + 2 / math.max(sim.trackLengthM, 100)) % 1)
-      local fwd = (n - c):normalize()
-      local side = fwd:clone():cross(vecUp):normalize()  -- as CSP's DynamicReturn: sides.x lies along this
-      local s = ac.getTrackAISplineSides(p)
-      local lateral = -(s.y + 2) + (s.x + s.y + 4) * r()
-      x, y, z = c.x + side.x * lateral, c.y, c.z + side.z * lateral
-    else
-      local car = ac.getCar(0)
-      local a, d = r() * math.pi * 2, 20 + r() * 280
-      x, y, z = car.position.x + math.sin(a) * d, car.position.y, car.position.z + math.cos(a) * d
-    end
-    local gy = pedlogic.groundBelow(ray, x, y + 30, z, 100)
-    if gy then
-      local clear = true
-      for i = 0, sim.carsCount - 1 do
-        local car = ac.getCar(i)
-        if car and (car.position.x - x) ^ 2 + (car.position.z - z) ^ 2 < 15 * 15 then clear = false break end
-      end
-      if clear then return x, gy, z end
-    end
-  end
-  return nil
-end
-
-local randomTypes = {}  -- every ped type but the flagman
-local flagmanType
-local flagmanWaved = false
-
-local function spawnPed(slot)
-  local def = randomTypes[1 + math.floor(spawnRandom() * #randomTypes)]
-  local x, y, z = randomSpot(spawnRandom)
-  if not x then return nil end
-  local ped = pedlogic.new(def, x, y, z, nowMs)
-  ped.slot = slot
-  return ped
-end
-
--- The flagman (C1 ref 99): one, standing beside the track at the start/finish line.
-local function spawnFlagman()
-  if not flagmanType or not splineAvailable() then return nil end
-  local c = ac.trackProgressToWorldCoordinate(0)
-  local n = ac.trackProgressToWorldCoordinate(2 / math.max(sim.trackLengthM, 100))
-  local side = (n - c):normalize():cross(vecUp):normalize()
-  local s = ac.getTrackAISplineSides(0)
-  for _, lateral in ipairs({s.x + 1.5, -(s.y + 1.5), s.x - 0.5, -(s.y - 0.5)}) do
-    local x, z = c.x + side.x * lateral, c.z + side.z * lateral
-    local gy = pedlogic.groundBelow(ray, x, c.y + 30, z, 100)
-    if gy then
-      local ped = pedlogic.new(flagmanType, x, gy, z, nowMs)
-      ped.flagman = true  -- C1's flagman only stands (his calm action) or runs when a car comes at him
-      ped.homeX, ped.homeZ = x, z
-      ped.dirX, ped.dirZ = -side.x * (lateral > 0 and 1 or -1), -side.z * (lateral > 0 and 1 or -1)  -- facing the track
-      return ped
-    end
-  end
-  return nil
-end
-
-local function populate()
-  seed = rng.hash(ac.getTrackFullID('/'))
-  spawnRandom = rng.new(seed)
-  behaviourRandom = rng.new(seed + 1)
-  pedlogic.setRandom(behaviourRandom)
-  peds = {}
-  pedlogic.gibs = {}
-  bloodTrails = {}
-  randomTypes, flagmanType, flagmanWaved = {}, nil, false
-  for _, def in ipairs(data.peds) do
-    if def.ref == c1data.FLAGMAN_REF then flagmanType = def else randomTypes[#randomTypes + 1] = def end
-  end
-  if #randomTypes == 0 then randomTypes = data.peds end
-  local flagman = spawnFlagman()
-  if flagman then peds[#peds + 1] = flagman end
-  for i = 1, settings.pedCount do
-    local p = spawnPed(i)
-    if p then peds[#peds + 1] = p end
-  end
-  log(('placed %d pedestrians (seed %d)%s'):format(#peds, seed, flagman and ', flagman at the start line' or ''))
-end
-
--- ---------------------------------------------------------------------------------------------
 -- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. Each file gets a few voices; a voice is only
 -- reused once its sound has finished (length from the WAV header), so a new sound never cuts or skips an
 -- old one. Splats and death sounds always play; other ped noises are limited to 20 a second.
 local audioPool = {}  -- file -> {voices = {{ev, busyUntil}}, length} or false
 local soundsThisSecond, soundSecond = 0, 0
 local MAX_VOICES_PER_FILE = 6
+local function realMs() return os.preciseClock() * 1000 end
 
 -- Length of a PCM WAV in ms (RIFF 'fmt ' byte rate, 'data' size); 3 s if it can't be read.
 local function wavLength(path)
@@ -274,7 +179,7 @@ local function playSoundAt(id, x, y, z, important)
   if not s then return end
   if (sim.cameraPosition.x - x) ^ 2 + (sim.cameraPosition.z - z) ^ 2 > 150 * 150 then return end
   if not important then
-    local sec = math.floor(nowMs / 1000)
+    local sec = math.floor(realMs() / 1000)
     if sec ~= soundSecond then soundSecond, soundsThisSecond = sec, 0 end
     if soundsThisSecond >= 20 then return end
     soundsThisSecond = soundsThisSecond + 1
@@ -284,7 +189,7 @@ local function playSoundAt(id, x, y, z, important)
   if not pool then return end
   local voice
   for _, v in ipairs(pool.voices) do
-    if v.busyUntil <= nowMs then voice = v break end
+    if v.busyUntil <= realMs() then voice = v break end
   end
   if not voice then
     if #pool.voices < MAX_VOICES_PER_FILE then
@@ -297,7 +202,7 @@ local function playSoundAt(id, x, y, z, important)
       return
     end
   end
-  voice.busyUntil = nowMs + pool.length + 50
+  voice.busyUntil = realMs() + pool.length + 50
   local ev = voice.ev
   ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
@@ -305,9 +210,6 @@ local function playSoundAt(id, x, y, z, important)
 end
 -- splats and the sounds of dying peds always play
 pedlogic.playSound = function(ped, id) playSoundAt(id, ped.x, ped.y, ped.z, id == 4020 or pedlogic.isDead(ped)) end
-
--- ---------------------------------------------------------------------------------------------
--- Cars
 local function carInfo(i, dt)
   local car = ac.getCar(i)
   if not car or (car.isConnected == false) then return nil end
@@ -383,25 +285,317 @@ local function staticGeometryAround(c)
   return false
 end
 
-local function award(c, credits, bannerDef)
-  if credits > 0 and c.index == sim.focusedCar then
-    popups[#popups + 1] = {text = ('+%d'):format(credits), time = nowMs}
+-- ---------------------------------------------------------------------------------------------
+-- Placing the peds. Everything here is decided by the track's seed alone (no cars, no local state), so every
+-- client builds the same peds with the same ids, paths and schedules.
+local GRID_BEFORE, GRID_AFTER = 400, 50  -- m of track around the start line kept free (grid, pit exit)
+
+local hasSpline
+local function splineAvailable()
+  if hasSpline == nil then
+    local a, b = ac.trackProgressToWorldCoordinate(0), ac.trackProgressToWorldCoordinate(0.5)
+    hasSpline = a:distanceSquared(b) > 1
   end
-  if bannerDef and c.index == sim.focusedCar then
-    if scoring.shouldShowBanner(banner and banner.def, banner and banner.time or 0, bannerDef, nowMs) then
-      banner = {def = bannerDef, time = nowMs}
+  return hasSpline
+end
+
+-- A random spot on (or just beside) the track, from the seeded generator r. Also returns the track direction.
+local function randomSpot(r)
+  for _ = 1, 30 do
+    if splineAvailable() then
+      local p = r()
+      local fromLine = p * sim.trackLengthM
+      if fromLine > GRID_AFTER and fromLine < sim.trackLengthM - GRID_BEFORE then
+        local c = ac.trackProgressToWorldCoordinate(p)
+        local n = ac.trackProgressToWorldCoordinate((p + 2 / math.max(sim.trackLengthM, 100)) % 1)
+        local fwd = (n - c):normalize()
+        local side = fwd:clone():cross(vecUp):normalize()  -- as CSP's DynamicReturn: sides.x lies along this
+        local s = ac.getTrackAISplineSides(p)
+        local lateral = -(s.y + 2) + (s.x + s.y + 4) * r()
+        local x, z = c.x + side.x * lateral, c.z + side.z * lateral
+        local gy = pedlogic.groundBelow(ray, x, c.y + 30, z, 100)
+        if gy then return x, gy, z, fwd.x, fwd.z end
+      end
+    else
+      -- no AI spline: around the track's origin (still the same for everyone)
+      local a, d = r() * math.pi * 2, 20 + r() * 300
+      local x, z = math.sin(a) * d, math.cos(a) * d
+      local gy = pedlogic.groundBelow(ray, x, 300, z, 600)
+      if gy then return x, gy, z, 0, 1 end
+    end
+  end
+  return nil
+end
+
+local function pedSeed(id) return rng.hash(seed .. ':' .. id) end
+
+-- The flagman (C1 ref 99): id 0, beside the track at the start/finish line, never walking.
+local function spawnFlagman(def)
+  if not splineAvailable() then return nil end
+  local c = ac.trackProgressToWorldCoordinate(0)
+  local n = ac.trackProgressToWorldCoordinate(2 / math.max(sim.trackLengthM, 100))
+  local fwd = (n - c):normalize()
+  local side = fwd:clone():cross(vecUp):normalize()
+  local s = ac.getTrackAISplineSides(0)
+  for _, lateral in ipairs({s.x + 1.5, -(s.y + 1.5), s.x - 0.5, -(s.y - 0.5)}) do
+    local x, z = c.x + side.x * lateral, c.z + side.z * lateral
+    local gy = pedlogic.groundBelow(ray, x, c.y + 30, z, 100)
+    if gy then
+      -- a one-point path: he stands there, facing the track
+      local f = lateral > 0 and -1 or 1
+      local path = {n = 1, x = {x}, y = {gy}, z = {z}, s = {0}, length = 0}
+      local ped = pedlogic.new(def, 0, path, pedSeed(0), 0)
+      ped.flagman = true
+      ped.dirX, ped.dirZ = side.x * f, side.z * f
+      return ped
+    end
+  end
+  return nil
+end
+
+-- Builds all peds (a coroutine: path generation raycasts are spread over frames).
+local function populateTask(pedCount)
+  seed = rng.hash(ac.getTrackFullID('/'))
+  local spawnRandom = rng.new(seed)
+  pedlogic.setRandom(rng.new(seed + 1))
+  local list, byId = {}, {}
+  local randomTypes, flagmanType = {}, nil
+  for _, def in ipairs(data.peds) do
+    if def.ref == c1data.FLAGMAN_REF then flagmanType = def else randomTypes[#randomTypes + 1] = def end
+  end
+  if #randomTypes == 0 then randomTypes = data.peds end
+  if flagmanType then
+    local f = spawnFlagman(flagmanType)
+    if f then list[#list + 1], byId[0] = f, f end
+  end
+  for id = 1, pedCount do
+    local def = randomTypes[1 + math.floor(spawnRandom() * #randomTypes)]
+    local x, y, z, fx, fz = randomSpot(spawnRandom)
+    if x then
+      local path = paths.generate(spawnRandom, ray, x, y, z, fx, fz)
+      local ped = pedlogic.new(def, id, path, pedSeed(id), 0)
+      list[#list + 1], byId[id] = ped, ped
+    end
+    if id % 10 == 0 then coroutine.yield() end
+  end
+  return list, byId
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Clock: session time in ms, the same on every client (the server syncs the session start). Negative before
+-- the start. In replays it comes from the replay itself.
+local TICK = 32  -- ms: whole milliseconds, so tick times are exactly the times events carry
+local simT        -- time of the last simulated tick
+local clockT = 0  -- this frame's clock
+local nowMs = 0   -- = clockT, for the visual parts (gibs, popups, banners)
+local sessionIndex
+
+-- ---------------------------------------------------------------------------------------------
+-- Who decides for a car: its own client if that client runs this app, else the host (the lowest session id
+-- among clients running it). Offline, this client decides everything.
+local online = sim.isOnlineRace
+local mySid = 0
+local presence = {}        -- session id -> os.preciseClock() of its last hello
+local hostSettings = nil   -- {pedCount, respawnSeconds} from the host, when it isn't us
+
+local function carSid(i)
+  local car = ac.getCar(i)
+  if online and car and car.sessionID then return car.sessionID end
+  return i
+end
+
+local function present(sid) local t = presence[sid] return t and os.preciseClock() - t < 15 end
+
+local function amHost()
+  if not online then return true end
+  for sid in pairs(presence) do if present(sid) and sid < mySid then return false end end
+  return true
+end
+
+local function decidesFor(sid)
+  if not online or sid == mySid then return true end
+  if present(sid) then return false end
+  return amHost()
+end
+
+local function effectivePedCount() return hostSettings and hostSettings.pedCount or settings.pedCount end
+local function effectiveRespawn() return hostSettings and hostSettings.respawnSeconds or settings.respawnSeconds end
+
+-- ---------------------------------------------------------------------------------------------
+-- Scores per car session id, from the events (so everyone, and every replay, counts the same).
+local scores = {}  -- sid -> {credits, kills}
+local function scoreFor(sid)
+  local s = scores[sid]
+  if not s then s = {credits = 0, kills = 0} scores[sid] = s end
+  return s
+end
+
+local function localIndexOf(sid)
+  for i = 0, sim.carsCount - 1 do if carSid(i) == sid then return i end end
+  return nil
+end
+
+local function showAward(sid, credits, bannerDef)
+  if sid ~= carSid(sim.focusedCar) then return end
+  if credits > 0 then popups[#popups + 1] = {text = ('+%d'):format(credits), time = os.preciseClock() * 1000} end
+  if bannerDef then
+    local now = os.preciseClock() * 1000
+    if scoring.shouldShowBanner(banner and banner.def, banner and banner.time or 0, bannerDef, now) then
+      banner = {def = bannerDef, time = now}
     end
   end
 end
 
-local function onKill(kill, c, niceShot)
-  kill.niceShot = niceShot
-  local credits, b = scoring.onKill(c.state, kill, c, nowMs)
-  award(c, credits, b)
+-- ---------------------------------------------------------------------------------------------
+-- Events: applying (own and received), sending, recording into replays.
+local function respawnDue(ped, t)
+  local delay = effectiveRespawn()
+  return ped.deathTime and delay > 0 and t >= ped.deathTime + delay * 1000
+end
+
+local eventLog = events.newLog()
+local pending = {}  -- logged events not applied yet (in the future of the simulation, e.g. after a replay rewind)
+local sendQueue = {high = {}, low = {}}
+local replayWriteSeq = 0
+local replayPending = {}
+local sendEvents, sendHello
+
+local function bannerFor(f) return f > 0 and scoring.bannerByIndex(f - 1) or nil end
+
+-- Applies an event to the peds and scores. own: this client made it (its effect on the peds is already done).
+local function applyEvent(ev, own, quiet)
+  local ped = pedsById[ev.ped]
+  if ev.kind == events.KILL then
+    local s = scoreFor(ev.car)
+    s.credits, s.kills = s.credits + ev.n, s.kills + 1
+    if not quiet then showAward(ev.car, ev.n, bannerFor(ev.f)) end
+    if ped and not own then pedlogic.applyKill(ped, events.killParams(ev), localIndexOf(ev.car), ev.t) ped.killerSid = ev.car end
+  elseif ev.kind == events.CORPSE then
+    if ped and not own then pedlogic.settleCorpse(ped, ev.x / 100, ev.y / 100, ev.z / 100, ev.t) end
+  elseif ev.kind == events.ANCHOR then
+    if ped and not own and not pedlogic.isDead(ped) then
+      ped.anchor = {t0 = ev.t, s0 = ev.n / 1000, dir0 = ev.a}
+      ped.scared, ped.calmSince, ped.waitingSince = false, nil, nil
+    end
+  elseif ev.kind == events.SCORE then
+    local s = scoreFor(ev.car)
+    s.credits = s.credits + ev.n
+    if not quiet then showAward(ev.car, ev.n, bannerFor(ev.f)) end
+  end
+end
+
+-- This client decided something: log, apply the score part, send it, record it.
+local function emit(ev)
+  if not events.add(eventLog, ev) then return end
+  applyEvent(ev, true)
+  if online then
+    local q = ev.kind == events.ANCHOR and sendQueue.low or sendQueue.high
+    q[#q + 1] = ev
+  end
+  replayPending[#replayPending + 1] = ev
+end
+
+-- An event from another client or from a replay: applied now, or when the simulation gets to its time.
+local function receive(ev)
+  if ev.kind < events.KILL or ev.kind > events.SCORE then return end
+  if events.add(eventLog, ev) then
+    if simT and ev.t > simT then pending[#pending + 1] = ev else applyEvent(ev, false) end
+  end
+end
+
+-- Applies the pending events due by time t (in time order).
+local function applyDue(t)
+  if #pending == 0 then return end
+  table.sort(pending, function(a, b) return a.t < b.t end)
+  local keep = {}
+  for _, ev in ipairs(pending) do
+    if ev.t <= t then
+      local ped = pedsById[ev.ped]
+      if ped and respawnDue(ped, ev.t) then pedlogic.respawn(ped, ped.deathTime + effectiveRespawn() * 1000) end
+      applyEvent(ev, false)
+    else keep[#keep + 1] = ev end
+  end
+  pending = keep
+end
+
+local lastSend = 0
+local function flushSends()
+  if not online or not sendEvents then return end
+  local now = os.preciseClock()
+  -- the original server takes one message per 200 ms; custom servers much more
+  local interval = sim.directMessagingAvailable and 0.05 or 0.25
+  if now - lastSend < interval then return end
+  local msg, count = {}, 0
+  for _, q in ipairs({sendQueue.high, sendQueue.low}) do
+    while #q > 0 and count < events.PER_MESSAGE do
+      msg[#msg + 1] = table.remove(q, 1)
+      count = count + 1
+    end
+  end
+  if count == 0 then return end
+  local st = sendEventsData()
+  for i = 0, events.PER_MESSAGE - 1 do events.write(st, i, msg[i + 1] or {kind = 0}) end
+  if sendEvents(nil) then lastSend = now
+  else for i = count, 1, -1 do table.insert(sendQueue.high, 1, msg[i]) end end  -- rate limited: retry later
+end
+
+local lastHello = -1e9
+local function sayHello(force)
+  if not online or not sendHello then return end
+  local now = os.preciseClock()
+  if not force and now - lastHello < 5 then return end
+  lastHello = now
+  sendHello({pedCount = settings.pedCount, respawnSeconds = settings.respawnSeconds, version = 2}, true)
 end
 
 -- ---------------------------------------------------------------------------------------------
--- Update
+-- Rebuilding the state at any moment from the event log: after loading, joining late, or a replay jump.
+
+local function rebuild(T)
+  pedlogic.gibs = {}
+  bloodTrails, projectiles, popups, banner = {}, {}, {}, nil
+  scores = {}
+  for _, ped in ipairs(peds) do
+    pedlogic.respawn(ped, 0)
+    ped.anchor = {t0 = 0, s0 = ped.initialS, dir0 = ped.initialDir}
+  end
+  -- events up to T, in order; dead peds come back on time in between
+  local tickT = math.floor(T / TICK) * TICK
+  pending = {}
+  for _, ev in ipairs(eventLog.list) do
+    if ev.t > tickT then
+      pending[#pending + 1] = ev  -- applied as the simulation reaches it (replays playing on)
+    else
+      local ped = pedsById[ev.ped]
+      if ped and respawnDue(ped, ev.t) then pedlogic.respawn(ped, ped.deathTime + effectiveRespawn() * 1000) end
+      applyEvent(ev, false, true)
+    end
+  end
+  for _, ped in ipairs(peds) do
+    if respawnDue(ped, tickT) then pedlogic.respawn(ped, ped.deathTime + effectiveRespawn() * 1000) end
+    -- a corpse whose resting place isn't known yet: let it fall/slide from where it died (no car to ride)
+    if pedlogic.isDead(ped) and not ped.corpseSettled then
+      ped.carriedBy = nil
+      local t = ped.deathTime
+      while t + TICK <= math.min(tickT, ped.deathTime + 6000) do
+        t = t + TICK
+        pedlogic.update(ped, {now = t, dtMs = TICK, cars = {}, camX = ped.x, camZ = ped.z - 10, ray = ray})
+      end
+    end
+  end
+  simT = math.floor(T / TICK) * TICK
+  -- put everyone in place for that tick
+  for _, ped in ipairs(peds) do
+    pedlogic.update(ped, {now = simT, dtMs = 0, cars = {}, camX = sim.cameraPosition.x, camZ = sim.cameraPosition.z, ray = ray})
+    ped.px, ped.py, ped.pz = ped.x, ped.y, ped.z
+  end
+end
+-- ---------------------------------------------------------------------------------------------
+-- Car-side bonuses and 'Nice shot, sir!' objects (decided by the client deciding for the car)
+local function scoreEvent(c, credits, bannerDef)
+  if credits > 0 then emit(events.score(clockT, c.sid, credits, bannerDef and bannerDef.index)) end
+end
+
 local function updateImpacts(c, carried)
   if not c.impact then return end
   local dv = c.impact.dv
@@ -412,23 +606,32 @@ local function updateImpacts(c, carried)
     local il = math.sqrt(ix * ix + iz * iz)
     if il > 0 and #carried > 0 then
       local credits, b = scoring.onImpact(c.state, carried, ix / il, iz / il, c.impact.speed)
-      if credits > 0 then award(c, credits, b) end
+      scoreEvent(c, credits, b)
     end
-  elseif c.speed > 5 and nowMs - c.lastProjectile > 1500 and not staticGeometryAround(c) then
+  elseif c.speed > 5 and clockT - c.lastProjectile > 1500 and not staticGeometryAround(c) then
     -- a light hit at speed with no wall around: something movable (a cone): it flies on and can hit peds
     -- ('Nice shot, sir!'). Walls and other track geometry never count.
-    c.lastProjectile = nowMs
+    c.lastProjectile = clockT
     local fx = c.vx / math.max(c.speed, 0.1)
     local fz = c.vz / math.max(c.speed, 0.1)
     projectiles[#projectiles + 1] = {car = c, x = c.x + fx * (c.halfL + 1), y = c.y, z = c.z + fz * (c.halfL + 1),
-      vx = c.vx * 1.2, vz = c.vz * 1.2, untilMs = nowMs + 2000}
+      vx = c.vx * 1.2, vz = c.vz * 1.2, untilMs = clockT + 2000}
   end
+end
+
+-- A kill decided here: score it and send it.
+local function decidedKill(ped, kill, c)
+  kill.ped = ped
+  kill.niceShot = kill.projectile
+  local credits, b = scoring.onKill(c.state, kill, c, simT)
+  ped.killerSid = c.sid
+  emit(events.kill(simT, ped.id, c.sid, kill, credits, b and b.index))
 end
 
 local function updateProjectiles(dtMs)
   local keep = {}
   for _, p in ipairs(projectiles) do
-    if nowMs < p.untilMs then
+    if simT < p.untilMs then
       local s = dtMs / 1000
       p.x, p.z = p.x + p.vx * s, p.z + p.vz * s
       local damp = math.max(0, 1 - 0.8 * s)
@@ -437,8 +640,8 @@ local function updateProjectiles(dtMs)
         if not pedlogic.isDead(ped) and (ped.x - p.x) ^ 2 + (ped.z - p.z) ^ 2 < 1.2 and math.abs(ped.y - p.y) < 3 then
           local v = math.sqrt(p.vx * p.vx + p.vz * p.vz)
           local fake = {index = p.car.index, speed = v, vx = p.vx, vy = 0, vz = p.vz}
-          local kill = pedlogic.hit(ped, fake, {side = 'front', lx = 0, lz = 0}, nowMs, true)
-          if kill then onKill(kill, p.car, true) end
+          local kill = pedlogic.hit(ped, fake, {side = 'front', lx = 0, lz = 0}, simT, true)
+          if kill then decidedKill(ped, kill, p.car) end
         end
       end
       keep[#keep + 1] = p
@@ -471,7 +674,151 @@ local function updateBlood(c)
   end
 end
 
+-- Carried corpses ride on the car that hit them (every frame, so they move smoothly).
+local function carryPeds()
+  local carried = {}
+  for _, ped in ipairs(peds) do
+    if ped.carriedBy then
+      local c = cars[ped.carriedBy]
+      if c and c.x then
+        local l = ped.carriedLocal
+        ped.x = c.x + c.sideX * l[1] + c.lookX * l[3]
+        ped.y = c.y - c.halfH + c.sideY * l[1] + c.lookY * l[3]
+        ped.z = c.z + c.sideZ * l[1] + c.lookZ * l[3]
+        ped.px, ped.py, ped.pz = ped.x, ped.y, ped.z
+        ped.carrierVx, ped.carrierVz = c.vx, c.vz
+        carried[c.index] = carried[c.index] or {}
+        table.insert(carried[c.index], ped)
+      else
+        pedlogic.detach(ped)
+      end
+    end
+  end
+  return carried
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- One fixed simulation step at session time t.
 local carList = {}
+local replaying = false
+
+local function tick(t)
+  local ctx = {now = t, dtMs = TICK, cars = carList, camX = sim.cameraPosition.x, camZ = sim.cameraPosition.z, ray = ray}
+  for _, ped in ipairs(peds) do
+    ped.px, ped.py, ped.pz = ped.x, ped.y, ped.z
+    if respawnDue(ped, t) then pedlogic.respawn(ped, ped.deathTime + effectiveRespawn() * 1000) end
+    -- far from everything, nothing happens to a ped that its schedule doesn't already say: skip it
+    local near = (ped.x - ctx.camX) ^ 2 + (ped.z - ctx.camZ) ^ 2 < 400 * 400 or ped.scared or pedlogic.isDead(ped)
+    if not near then
+      for _, c in ipairs(carList) do
+        if (ped.x - c.x) ^ 2 + (ped.z - c.z) ^ 2 < 200 * 200 then near = true break end
+      end
+    end
+    if near then
+      local ev = pedlogic.update(ped, ctx)
+      -- calmed down: the deciding client sends where it now walks from
+      if ev == 'calm' then
+        -- anchors travel in mm: use the same rounded value here, so this client and the others agree exactly
+        ped.anchor.s0 = math.floor(ped.anchor.s0 * 1000 + 0.5) / 1000
+        if not replaying and decidesFor(ped.scaredBy or mySid) then
+          emit(events.anchor(t, ped.id, ped.scaredBy or mySid, ped.anchor.s0, ped.anchor.dir0))
+        else
+          -- someone else decides where it calms down (or the replay has it): stay scared until their anchor
+          -- arrives, so a local guess can't overwrite it; after 10 s without one, keep the local anchor
+          ped.waitingSince = ped.waitingSince or t
+          if t - ped.waitingSince < 10000 then
+            ped.scared, ped.calmSince = true, t
+          else
+            ped.waitingSince = nil
+          end
+        end
+      end
+      -- a corpse at rest: its place is sent, so it's the same everywhere
+      if not replaying and pedlogic.corpseSettled(ped) and not ped.corpseSettled and decidesFor(ped.killerSid or mySid) then
+        -- corpse places travel in cm: settle here on the same rounded place the others get
+        local function cm(v) return math.floor(v * 100 + 0.5) / 100 end
+        pedlogic.settleCorpse(ped, cm(ped.x), cm(ped.y), cm(ped.z), t)
+        emit(events.corpse(t, ped.id, ped.killerSid or mySid, ped.x, ped.y, ped.z))
+      end
+      -- collisions (CheckPedestrianDeathScenario), for the cars this client decides for; replays only
+      -- show the kills that were recorded
+      local touched = false
+      for _, c in ipairs(carList) do
+        if not (c.doingNothing and not c.human) and ped.carriedBy ~= c.index then
+          local reach = math.max(8.3, c.speed * TICK / 1000 * 1.5) + c.halfL
+          if (ped.x - c.x) ^ 2 + (ped.z - c.z) ^ 2 < reach * reach then
+            c.dtMs = TICK
+            local hit = pedlogic.carHitTest(ped, c)
+            if hit then
+              touched = true
+              if pedlogic.isDead(ped) then
+                if pedlogic.bloodyWheels(ped, c) and not ped.satUpon then pedlogic.burst(ped, c.speed / U / 1000, false, t) end
+                ped.satUpon = true
+              elseif not replaying and c.decides then
+                local kill = pedlogic.hit(ped, c, hit, t, false)
+                if kill then decidedKill(ped, kill, c) end
+              end
+            end
+          end
+        end
+      end
+      if not touched then ped.collidedLastTime = false ped.satUpon = false end
+    end
+  end
+  if not replaying then updateProjectiles(TICK) end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Replays: the clock and the events, recorded with every replay frame (integers aren't blended between
+-- frames; the clock is, which is what we want).
+local replayStream
+local replayReadSeq
+
+local function openReplayStream()
+  replayStream = ac.ReplayStream(events.layout(ac.StructItem, events.PER_REPLAY_FRAME, {
+    ac.StructItem.key('carmapeds.replay.v1'),
+    clock = ac.StructItem.double(),
+    seq = ac.StructItem.uint32(),
+    seed = ac.StructItem.uint32(),
+  }), function()
+    -- replay closed: back to live
+    replaying = false
+    replayReadSeq = nil
+  end)
+end
+
+local function writeReplay()
+  if not replayStream then return end
+  replayStream.clock = clockT
+  replayStream.seed = seed
+  for _, ev in ipairs(replayPending) do
+    events.write(replayStream, replayWriteSeq % events.PER_REPLAY_FRAME, ev)
+    replayWriteSeq = replayWriteSeq + 1
+  end
+  replayStream.seq = replayWriteSeq
+  replayPending = {}
+end
+
+local function readReplay()
+  if not replayStream then return end
+  local seq = tonumber(replayStream.seq)
+  if not replayReadSeq or seq < replayReadSeq then replayReadSeq = seq return end
+  for i = math.max(replayReadSeq, seq - events.PER_REPLAY_FRAME), seq - 1 do
+    receive(events.read(replayStream, i % events.PER_REPLAY_FRAME))
+  end
+  replayReadSeq = seq
+end
+
+-- ---------------------------------------------------------------------------------------------
+local populating -- coroutine building the peds
+local populatedCount
+
+local function startPopulating()
+  peds, pedsById = {}, {}
+  populatedCount = effectivePedCount()
+  populating = coroutine.create(function() return populateTask(populatedCount) end)
+end
+
 function script.update(dt)
   if loader then
     local ok, err = coroutine.resume(loader)
@@ -483,108 +830,119 @@ function script.update(dt)
       if data then
         if data.cunningStunt then scoring.STUNT_CREDITS = data.cunningStunt[2] end
         preloadSounds()
-        populate()
+        startPopulating()
       end
     end
     return
   end
-  if not data or sim.isPaused or sim.isReplayActive or dt <= 0 then return end
-  local dtMs = math.min(dt, 0.1) * 1000
-  nowMs = nowMs + dtMs
+  if not data then return end
+  if populating then
+    local ok, list, byId = coroutine.resume(populating)
+    if not ok then
+      loadError, populating = tostring(list), nil
+      log(list)
+    elseif coroutine.status(populating) == 'dead' then
+      populating = nil
+      peds, pedsById = list, byId
+      log(('placed %d pedestrians (seed %d)%s'):format(#peds, seed, pedsById[0] and ', flagman at the start line' or ''))
+      if not replayStream then openReplayStream() end
+      simT = nil
+    end
+    return
+  end
 
+  -- online: hellos, and the host's settings
+  if online and not sendEvents then
+    mySid = carSid(0)
+    sendEvents, sendEventsData = ac.OnlineEvent(events.layout(ac.StructItem, events.PER_MESSAGE, {ac.StructItem.key('carmapeds.events.v1')}),
+      function(sender, msg)
+        if sender and sender.index == 0 then return end  -- our own, back from the server
+        for i = 0, events.PER_MESSAGE - 1 do
+          if msg.kind[i] ~= 0 then receive(events.read(msg, i)) end
+        end
+      end)
+    sendHello = ac.OnlineEvent({ac.StructItem.key('carmapeds.hello.v1'), pedCount = ac.StructItem.uint16(),
+      respawnSeconds = ac.StructItem.uint16(), version = ac.StructItem.uint16()}, function(sender, msg)
+        if not sender or sender.index == 0 then return end
+        presence[sender.sessionID] = os.preciseClock()
+        -- the host's ped count and respawn time apply to everyone (ped ids must match)
+        if sender.sessionID < mySid then
+          local host = true
+          for sid in pairs(presence) do if present(sid) and sid < sender.sessionID then host = false end end
+          if host then hostSettings = {pedCount = msg.pedCount, respawnSeconds = msg.respawnSeconds} end
+        end
+      end)
+    sayHello(true)
+  end
+  sayHello(false)
+  if hostSettings and amHost() then hostSettings = nil end
+  if effectivePedCount() ~= populatedCount then startPopulating() return end
+
+  -- the clock
+  replaying = sim.isReplayActive
+  if replaying then
+    if not replayStream or replayStream.clock == 0 then return end
+    clockT = replayStream.clock
+  else
+    if sim.currentSessionIndex ~= sessionIndex then
+      -- a new session: a fresh start
+      sessionIndex = sim.currentSessionIndex
+      eventLog = events.newLog()
+      simT = nil
+    end
+    clockT = -sim.timeToSessionStart
+  end
+  nowMs = clockT
+  if sim.isPaused and not replaying then return end
+
+  -- cars
   carList = {}
   for i = 0, sim.carsCount - 1 do
     local c = carInfo(i, dt)
-    if c then carList[#carList + 1] = c end
+    if c then
+      c.sid = carSid(i)
+      c.decides = decidesFor(c.sid)
+      carList[#carList + 1] = c
+    end
   end
-  local ctx = {now = nowMs, dtMs = dtMs, cars = carList, camX = sim.cameraPosition.x, camZ = sim.cameraPosition.z, ray = ray}
 
-  local carriedBy = {}
-  for _, ped in ipairs(peds) do
-    -- carried corpses ride along with the car that hit them
-    if ped.carriedBy then
-      local c = cars[ped.carriedBy]
-      if c then
-        local l = ped.carriedLocal
-        ped.x = c.x + c.sideX * l[1] + c.lookX * l[3]
-        ped.y = c.y - c.halfH + c.sideY * l[1] + c.lookY * l[3]
-        ped.z = c.z + c.sideZ * l[1] + c.lookZ * l[3]
-        ped.carrierVx, ped.carrierVz = c.vx, c.vz
-        carriedBy[c.index] = carriedBy[c.index] or {}
-        table.insert(carriedBy[c.index], ped)
-      else
-        pedlogic.detach(ped)
-      end
-    end
-    -- simulate peds near any car or the camera; far ones wait
-    local near = (ped.x - ctx.camX) ^ 2 + (ped.z - ctx.camZ) ^ 2 < 400 * 400
-    if not near then
-      for _, c in ipairs(carList) do
-        if (ped.x - c.x) ^ 2 + (ped.z - c.z) ^ 2 < 200 * 200 then near = true break end
-      end
-    end
-    if near then
-      pedlogic.update(ped, ctx)
-      -- collisions (CheckPedestrianDeathScenario)
-      local touched = false
-      for _, c in ipairs(carList) do
-        if not (c.doingNothing and not c.human) and ped.carriedBy ~= c.index then
-          local reach = math.max(8.3, c.speed * dtMs / 1000 * 1.5) + c.halfL
-          if (ped.x - c.x) ^ 2 + (ped.z - c.z) ^ 2 < reach * reach then
-            local hit = pedlogic.carHitTest(ped, c)
-            if hit then
-              touched = true
-              if pedlogic.isDead(ped) then
-                if pedlogic.bloodyWheels(ped, c) and not ped.satUpon then pedlogic.burst(ped, c.speed / U / 1000, false, nowMs) end
-                ped.satUpon = true
-              else
-                local kill = pedlogic.hit(ped, c, hit, nowMs, false)
-                if kill then onKill(kill, c, false) end
-              end
-            end
-          end
-        end
-      end
-      if not touched then ped.collidedLastTime = false ped.satUpon = false end
-    end
+  if replaying then readReplay() end
+  -- big jumps (replay seek or rewind, first frame, coming back from a replay): rebuild from the events
+  if not simT or clockT < simT - 100 or clockT > simT + 3000 then
+    local play = pedlogic.playSound
+    pedlogic.playSound = function() end
+    rebuild(clockT)
+    pedlogic.playSound = play
+    pedlogic.gibs = {}
   end
-  for _, c in ipairs(carList) do
-    updateImpacts(c, carriedBy[c.index] or {})
-    updateBlood(c)
-    -- cunning stunt: over and back on its wheels
-    local gy = groundAt(c.x, c.y, c.z)
-    local credits, b = scoring.updateStunt(c.state, {upY = c.upY, teleported = c.teleported,
-      onGround = gy ~= nil and c.y - c.halfH - gy < 0.6}, nowMs)
-    if credits > 0 then award(c, credits, b) end
+  while simT + TICK <= clockT do
+    simT = simT + TICK
+    applyDue(simT)
+    tick(simT)
   end
-  -- the flagman waves his flag when the cars set off (C1: when the countdown reaches zero)
-  if not flagmanWaved then
+
+  local carried = carryPeds()
+  if not replaying then
     for _, c in ipairs(carList) do
-      if c.speed > 2 then
-        flagmanWaved = true
-        for _, ped in ipairs(peds) do
-          if ped.flagman and not pedlogic.isDead(ped) and #ped.def.actions >= 8 then pedlogic.changeActionTo(ped, 7, true, nowMs) end
-        end
-        break
+      if c.decides then
+        updateImpacts(c, carried[c.index] or {})
+        -- cunning stunt: over and back on its wheels
+        local gy = groundAt(c.x, c.y, c.z)
+        local credits, b = scoring.updateStunt(c.state, {upY = c.upY, teleported = c.teleported,
+          onGround = gy ~= nil and c.y - c.halfH - gy < 0.6}, clockT)
+        scoreEvent(c, credits, b)
       end
     end
   end
-  updateProjectiles(dtMs)
-  pedlogic.updateGibs(nowMs, dtMs)
+  for _, c in ipairs(carList) do updateBlood(c) end
+  pedlogic.updateGibs(clockT, math.min(dt, 0.1) * 1000)
+  if not replaying then writeReplay() end
+  flushSends()
 
-  -- respawn the dead after a while, somewhere else
-  if settings.respawnSeconds > 0 then
-    for i, ped in ipairs(peds) do
-      if ped.deathTime and nowMs - ped.deathTime > settings.respawnSeconds * 1000 then
-        local p = ped.flagman and spawnFlagman() or spawnPed(ped.slot)
-        if p then peds[i] = p end
-      end
-    end
-  end
   -- blood trails fade after 30 s
   if #bloodTrails > 0 and nowMs - bloodTrails[1][7] > 30000 then
     local keep = {}
-    for _, t in ipairs(bloodTrails) do if nowMs - t[7] <= 30000 then keep[#keep + 1] = t end end
+    for _, t in ipairs(bloodTrails) do if nowMs - t[7] <= 30000 and nowMs >= t[7] then keep[#keep + 1] = t end end
     bloodTrails = keep
   end
   if #bloodTrails > 3000 then
@@ -683,8 +1041,12 @@ render.on('main.track.transparent', function()
   end
 
   render.setDepthMode(render.DepthMode.Normal)
+  -- peds move in 30 Hz steps: draw them between the last two
+  local alpha = simT and math.max(0, math.min(1, (clockT - simT) / TICK)) or 1
   for _, ped in ipairs(peds) do
-    if ped.image and (ped.x - cam.x) ^ 2 + (ped.z - cam.z) ^ 2 < maxD2 then
+    local px, py, pz = ped.x, ped.y, ped.z
+    if ped.px then px, py, pz = ped.px + (px - ped.px) * alpha, ped.py + (py - ped.py) * alpha, ped.pz + (pz - ped.pz) * alpha end
+    if ped.image and (px - cam.x) ^ 2 + (pz - cam.z) ^ 2 < maxD2 then
       local tex = textures[ped.image]
       if tex then
         local spin = 0
@@ -692,7 +1054,7 @@ render.on('main.track.transparent', function()
           spin = (nowMs - ped.lastActionChange) / ped.spinPeriod * 360
         end
         -- C1 maps unflipped frames mirrored (PedCallBack map_transform -1), flipped ones as stored
-        drawSprite(tex, ped.x + (ped.offX or 0) * camRight.x, ped.y + (ped.offY or 0) + ped.offsetY, ped.z + (ped.offX or 0) * camRight.z,
+        drawSprite(tex, px + (ped.offX or 0) * camRight.x, py + (ped.offY or 0) + ped.offsetY, pz + (ped.offX or 0) * camRight.z,
           ped.width, ped.height2, not ped.flipped, spin)
       end
     end
@@ -711,12 +1073,13 @@ end)
 -- HUD: credits and C1's bonus banners for the focused car
 function script.fullscreenUI()
   if not data or not settings.hud then return end
-  local c = cars[sim.focusedCar]
+  local c = scores[carSid(sim.focusedCar)]
   local screen = ui.windowSize()
+  local nowMs = os.preciseClock() * 1000  -- banners and popups run in real time (the session clock can jump)
   if c then
     ui.pushDWriteFont('Segoe UI;Weight=Bold')
     ui.setCursor(vec2(screen.x - 420, 20))
-    ui.dwriteTextAligned(('CREDITS %d   KILLS %d'):format(c.state.credits, c.state.kills), 28, ui.Alignment.End, ui.Alignment.Start, vec2(400, 40), false, rgbm(1, 0.85, 0.1, 1))
+    ui.dwriteTextAligned(('CREDITS %d   KILLS %d'):format(c.credits, c.kills), 28, ui.Alignment.End, ui.Alignment.Start, vec2(400, 40), false, rgbm(1, 0.85, 0.1, 1))
     ui.popDWriteFont()
   end
   if banner then
@@ -771,10 +1134,16 @@ function script.windowMain(dt)
     ui.text(('%d pedestrians, %d dead'):format(alive, dead))
     ui.separator()
     local rows = {}
-    for _, c in pairs(cars) do rows[#rows + 1] = c end
-    table.sort(rows, function(a, b) return a.state.credits > b.state.credits end)
-    for _, c in ipairs(rows) do
-      ui.text(('%-24s %7d cr  %4d kills'):format(ac.getDriverName(c.index) or ('Car ' .. c.index), c.state.credits, c.state.kills))
+    for sid, s in pairs(scores) do rows[#rows + 1] = {sid = sid, s = s} end
+    table.sort(rows, function(a, b) return a.s.credits > b.s.credits end)
+    for _, r in ipairs(rows) do
+      local i = localIndexOf(r.sid)
+      ui.text(('%-24s %7d cr  %4d kills'):format(i and ac.getDriverName(i) or ('Car ' .. r.sid), r.s.credits, r.s.kills))
+    end
+    if online then
+      ui.separator()
+      ui.text(('Online: %s%s'):format(amHost() and 'deciding for cars without the app' or 'following the host',
+        sim.directMessagingAvailable and '' or ' (standard server: events every 250 ms)'))
     end
   end
 end
@@ -783,15 +1152,21 @@ function script.windowSettings(dt)
   ui.textWrapped('Carmageddon data is read from the DATA folder in this app\'s folder.')
   if ui.button('Reload') then startLoading() end
   ui.sameLine()
-  if ui.button('Respawn all') and data then populate() end
+  if not online then
+    if ui.button('Respawn all') and data then eventLog = events.newLog() simT = nil end
+  end
   ui.separator()
   local function slider(key, label, min, max, scale, integer)
     local v = ui.slider('##' .. key, settings[key] * scale, min, max, label) / scale
     if integer then v = math.floor(v + 0.5) end
     if v ~= settings[key] then settings[key] = v end
   end
-  slider('pedCount', 'Pedestrians: %.0f (Respawn all to apply)', 10, 1000, 1, true)
-  slider('respawnSeconds', 'Respawn dead after: %.0f s (0 = never)', 0, 600, 1, true)
+  if hostSettings then
+    ui.textWrapped(('Pedestrians and respawn time come from the host: %d, %d s.'):format(hostSettings.pedCount, hostSettings.respawnSeconds))
+  else
+    slider('pedCount', 'Pedestrians: %.0f', 10, 1000, 1, true)
+    slider('respawnSeconds', 'Respawn dead after: %.0f s (0 = never)', 0, 600, 1, true)
+  end
   slider('drawDistance', 'Draw distance: %.0f m', 50, 1000, 1)
   slider('volume', 'Volume: %.0f%%', 0, 100, 100)
   slider('brightness', 'Sprite brightness: %.0f%%', 10, 300, 100)
@@ -814,6 +1189,9 @@ end
 pedlogic.mirrorBearings = settings.mirrorBearings
 -- offline tests (tests/smoke_test.lua) look at the internals through this; nil in AC
 if __carmapedsTest then
-  __carmapedsTest.state = function() return {peds = peds, cars = cars, projectiles = projectiles, audioPool = audioPool} end
+  __carmapedsTest.state = function()
+    return {peds = peds, cars = cars, projectiles = projectiles, audioPool = audioPool, scores = scores, log = eventLog,
+      simT = simT, clockT = clockT}
+  end
 end
 startLoading()

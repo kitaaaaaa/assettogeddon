@@ -44,8 +44,20 @@ local function flat(x, y, z, dx, dy, dz, len)
   if dy < 0 and y >= 0 and y <= len then return y end
   return -1
 end
+-- a straight 30 m path along z from (x, 0, z), and a ped on it (seed 500: starts mid-path)
+local function straightPath(x, z)
+  local p = {x = {}, y = {}, z = {}, s = {}}
+  for i = 1, 21 do p.x[i], p.y[i], p.z[i], p.s[i] = x, 0, z + (i - 1) * 1.5, (i - 1) * 1.5 end
+  p.n, p.length = 21, 30
+  return p
+end
+local nextId = 0
+local function newPed(x, y, z, t)
+  nextId = nextId + 1
+  return pedlogic.new(def, nextId, straightPath(x, z - 15), 500, t)
+end
 local now = 1000
-local ped = pedlogic.new(def, 0, 0, 0, now)
+local ped = newPed(0, 0, 0, now)
 check(ped.action == 0, 'starts with action 0')
 
 -- calm: after the reaction time it picks between stand and walk, and a walker moves
@@ -55,10 +67,12 @@ for _ = 1, 600 do
   pedlogic.update(ped, {now = now, dtMs = 16, cars = {}, camX = 0, camZ = -20, ray = flat})
   if ped.x ~= 0 or ped.z ~= 0 then moved = true end
 end
-check(moved, 'a calm ped wanders')
+check(moved, 'a calm ped walks its path')
 check(ped.width and math.abs(ped.height2 - 0.25 * 6.9) < 1e-9, 'sprite height from the data (0.25 units = 1.725 m)')
 
--- danger: a fast car heading at the ped makes it run (action 2) away from the car
+-- danger: a fast car heading at the ped makes it run (action 2) away from the car, along its path
+ped = newPed(0, 0, 0, now)  -- mid-path, room to run either way
+local z0 = ped.z
 local car = {index = 0, x = ped.x, y = 0, z = ped.z - 10, dirX = 0, dirZ = 1, speed = 25, human = true}
 local danger, dX, dZ = pedlogic.dangerLevel(ped, {car})
 check(danger >= 5, 'danger from an approaching car: ' .. danger)
@@ -69,7 +83,7 @@ pedlogic.update(ped, {now = now, dtMs = 16, cars = {car}, camX = 0, camZ = -20, 
 check(ped.action == 2, 'ped runs')
 check(sounds[#sounds] == 4200, 'run sound played')
 for _ = 1, 30 do now = now + 16; pedlogic.update(ped, {now = now, dtMs = 16, cars = {car}, camX = 0, camZ = -20, ray = flat}) end
-check(ped.dirZ > 0, 'ped runs away from the car')
+check(ped.dirZ > 0 and ped.z > z0 and ped.x == 0, 'ped runs away from the car, along its path')
 local carBehind = {index = 0, x = ped.x, y = 0, z = ped.z + 30, dirX = 0, dirZ = 1, speed = 25}
 check(pedlogic.dangerLevel(ped, {carBehind}) == 0, 'no danger from a car moving away')
 
@@ -87,14 +101,14 @@ hitCar.x, hitCar.z, hitCar.vz, hitCar.dtMs = ped.x, ped.z + 4, 300, 16
 check(pedlogic.carHitTest(ped, hitCar) ~= nil, 'swept test catches a ped passed within a frame')
 
 -- zero-speed contact: turn back on the first frame, dead on the second (C1)
-local p2 = pedlogic.new(def, 50, 0, 0, now)
+local p2 = newPed(50, 0, 0, now)
 local still = {index = 2, speed = 0, vx = 0, vy = 0, vz = 0}
 check(pedlogic.hit(p2, still, {side = 'front', lx = 0, lz = 2}, now) == nil and p2.hitPoints > 0, 'first zero-speed contact only turns the ped')
 local k0 = pedlogic.hit(p2, still, {side = 'front', lx = 0, lz = 2}, now + 16)
 check(k0 and p2.hitPoints < 0, 'second consecutive zero-speed contact kills')
 
 -- kill at speed: dies, fatal action, gibs, killer recorded
-local p3 = pedlogic.new(def, 80, 0, 0, now)
+local p3 = newPed(80, 0, 0, now)
 local kill = pedlogic.hit(p3, {index = 3, speed = 30, vx = 0, vy = 0, vz = 30}, {side = 'front', lx = 0, lz = 2}, now)
 check(kill and pedlogic.isDead(p3) and p3.killer == 3, 'fast hit kills')
 check(p3.action == 3 or p3.action == 4, 'death action')
@@ -134,23 +148,23 @@ end
 local function settle(ped)
   for _ = 1, 600 do now = now + 16; pedlogic.update(ped, {now = now, dtMs = 16, cars = {}, camX = 0, camZ = -20, ray = world}) end
 end
-local p4 = pedlogic.new(def, 0, 0, 0, now)
+local p4 = newPed(0, 0, 0, now)
 pedlogic.hit(p4, {index = 4, speed = 0.01, vx = 0, vy = 0, vz = 0}, {side = 'front', lx = 0, lz = 0}, now, true)
 p4.vx, p4.vz = 0, 0.02  -- 20 m/s towards the wall
 settle(p4)
 check(p4.vz == 0 and p4.z < 30 and p4.z > 25, 'sliding corpse stops at the wall: z=' .. p4.z)
-local p5 = pedlogic.new(def, 0, 0, -50, now)
+local p5 = newPed(0, 0, -50, now)
 pedlogic.hit(p5, {index = 4, speed = 0.01, vx = 0, vy = 0, vz = 0}, {side = 'front', lx = 0, lz = 0}, now, true)
 p5.vx, p5.vz = 0.005, 0
 settle(p5)
 check(p5.vx == 0 and math.abs(p5.x - 25 / 16) < 0.1, 'corpse slides to a stop by friction (5 m/s at 8 m/s^2 = 1.56 m): x=' .. p5.x)
-local p6 = pedlogic.new(def, 95, 0, -50, now)
+local p6 = newPed(95, 0, -50, now)
 pedlogic.hit(p6, {index = 4, speed = 0.01, vx = 0, vy = 0, vz = 0}, {side = 'front', lx = 0, lz = 0}, now, true)
 p6.vx, p6.vz = 0.015, 0
 settle(p6)
 check(p6.x > 100 and math.abs(p6.y + 40) < 1e-6 and not p6.midAir, 'corpse goes over the cliff and lands at the bottom: y=' .. p6.y)
 -- a carried corpse let go keeps moving with the car's speed
-local p7 = pedlogic.new(def, 0, 0, -50, now)
+local p7 = newPed(0, 0, -50, now)
 p7.carriedBy, p7.carrierVx, p7.carrierVz = 9, 10, 0
 pedlogic.detach(p7)
 check(p7.vx > 0 and p7.midAir and not p7.carriedBy, 'released corpse keeps momentum')
