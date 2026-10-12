@@ -125,19 +125,19 @@ local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z,
 -- play once at a time: starting it again cuts off the sound already playing (peds of one type scream the
 -- same file, so screams were cut short). So each file is loaded as a few separate copies (slots: the path is
 -- written differently, SOUND/./X.WAV, SOUND/././X.WAV, ..., and minDistance differs a tiny bit), and a sound
--- only starts on a copy that isn't playing; with none free, it's dropped. One unplayed event per copy is kept
--- so it stays loaded.
--- A sound starts muted, stays muted for 100 ms (and at least 3 frames), then fades in over 150 ms: CSP
--- applies an event's 3D position and distance falloff a moment after it starts, so until then it plays at full
--- volume (in recordings, the first 40-60 ms of every scream came out 14 dB too loud), and switching the volume
--- straight up would start it mid-waveform with a click.
+-- only starts on a copy that isn't playing; with none free, it's dropped.
+-- Each copy has an event made ready in advance. To play, it is given its position and volume and started two
+-- frames (and at least 40 ms) later, once CSP has passed those to the audio engine: started straight away, its
+-- first moment played at full volume from the wrong place. Doppler is off (as for CSP's own ambient sounds,
+-- and C1's peds): with the camera moving at the car's speed it bent the screams' pitch, worse the faster the
+-- car, and a sound that had just been placed got a huge shift.
 -- Live peds' noises (screams) are limited to a few at once, started at least 250 ms apart, and a ped doesn't
 -- start one while its last one is playing, so a crowd reacting to a car isn't a wall of noise. Splats and
 -- death sounds have more room.
 local SLOTS = 4
-local audioFiles = {}  -- file -> {keep = {[slot] = unplayed event}} or false (missing)
-local playing = {}     -- {ev, started (ms), important, file, slot, volume, pos, muteFrames}
-local MUTE_MS, MUTE_FRAMES, FADE_MS = 100, 3, 150
+local audioFiles = {}  -- file -> {ready = {[slot] = event made ready, not started}} or false (missing)
+local playing = {}     -- {ev, important, file, slot, pos, waitFrames, queued (ms), started (ms, once started)}
+local START_FRAMES, START_MS = 2, 40
 local MAX_SCREAMS, SCREAM_GAP_MS, MAX_IMPORTANT = 3, 250, 16
 local lastScreamMs = -1e9
 local function realMs() return os.preciseClock() * 1000 end
@@ -146,15 +146,15 @@ local function newEvent(file, slot)
   local dir, name = file:match('^(.*[/\\])([^/\\]+)$')
   local path = dir and (dir .. ('./'):rep(slot) .. name) or file
   return ac.AudioEvent.fromFile({filename = path, use3D = true, loop = false, minDistance = 5 + slot * 0.01,
-    maxDistance = 150}, false)
+    maxDistance = 150, dopplerEffect = 0}, false)
 end
 
 local function audioFor(file)
   local a = audioFiles[file]
   if a == nil then
     if not io.fileExists(file) then audioFiles[file] = false return false end
-    a = {keep = {}}
-    for slot = 0, SLOTS - 1 do a.keep[slot] = newEvent(file, slot) end
+    a = {ready = {}}
+    for slot = 0, SLOTS - 1 do a.ready[slot] = newEvent(file, slot) end
     audioFiles[file] = a
   end
   return a
@@ -174,23 +174,21 @@ local function preloadSounds()
   end
 end
 
--- Turns up sounds once their 3D settings are in place, and disposes the events of sounds that have finished
--- (or, should one never report it, after 30 s). Called every frame.
+-- Starts queued sounds once their position and volume have reached the audio engine, and disposes the events
+-- of sounds that have finished (or, should one never report it, after 30 s). Called every frame.
 local function updateSounds()
   local now = realMs()
   for i = #playing, 1, -1 do
     local p = playing[i]
-    if p.muteFrames then
+    if not p.started then
       p.ev:setPosition(p.pos, vecUp, vec3(0, 0, 1), nil)
-      p.muteFrames = p.muteFrames - 1
-      if p.muteFrames <= 0 and now - p.started >= MUTE_MS then p.fadeFrom, p.muteFrames = now, nil end
-    end
-    if p.fadeFrom then
-      local k = math.min(1, (now - p.fadeFrom) / FADE_MS)
-      p.ev.volume = p.volume * k
-      if k >= 1 then p.fadeFrom = nil end
-    end
-    if not p.ev:isValid() or now - p.started > 30000 then
+      p.waitFrames = p.waitFrames - 1
+      if p.waitFrames <= 0 and now - p.queued >= START_MS then
+        p.ev:start()
+        p.started = now
+        audioFiles[p.file].ready[p.slot] = newEvent(p.file, p.slot)  -- the next one for this copy
+      end
+    elseif not p.ev:isValid() or now - p.started > 30000 then
       p.ev:dispose()
       p.done = true
       table.remove(playing, i)
@@ -207,8 +205,8 @@ local function playSoundAt(id, x, y, z, important)
   local now = realMs()
   if not important and now - lastScreamMs < SCREAM_GAP_MS then return nil end
   local file = data.soundDir .. s.file
-  if not audioFor(file) then return nil end
-  updateSounds()
+  local a = audioFor(file)
+  if not a then return nil end
   local n, busy = 0, {}
   for _, p in ipairs(playing) do
     if p.important == important then n = n + 1 end
@@ -219,13 +217,13 @@ local function playSoundAt(id, x, y, z, important)
   for k = 0, SLOTS - 1 do if not busy[k] then slot = k break end end
   if not slot then return nil end
   if not important then lastScreamMs = now end
-  local ev = newEvent(file, slot)
+  local ev = a.ready[slot] or newEvent(file, slot)
+  a.ready[slot] = nil
   local pos = vec3(x, y + 1, z)
-  ev.volume = 0
+  ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(pos, vecUp, vec3(0, 0, 1), nil)
-  ev:start()
-  local p = {ev = ev, started = now, important = important, file = file, slot = slot, pos = pos,
-    volume = settings.volume * (s.maxVolume or 255) / 255, muteFrames = MUTE_FRAMES}
+  local p = {ev = ev, queued = now, important = important, file = file, slot = slot, pos = pos,
+    waitFrames = START_FRAMES}
   playing[#playing + 1] = p
   return p
 end
