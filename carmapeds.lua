@@ -121,12 +121,14 @@ local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z,
 -- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. A one-shot CSP audio event made from a file
 -- plays only once (CSP docs: it "will become invalid once played once"), so every sound gets a new event,
 -- disposed once it has finished (length from the WAV header). CSP keeps the loaded file for the next one;
--- one unplayed event per file is kept so it stays loaded. Splats and death sounds always play; other ped
--- noises are limited to 20 a second, and at most 48 sounds play at once.
+-- one unplayed event per file is kept so it stays loaded. A sound that has started is never cut off: when
+-- there's no room, the new one is dropped. Live peds' noises (screams) are limited to a few at once, started
+-- at least 250 ms apart, so a crowd reacting to a car doesn't become a wall of noise (and doesn't make the
+-- game's audio engine steal voices, which cuts sounds short). Splats and death sounds have more room.
 local audioFiles = {}  -- file -> {keep = unplayed event, length = ms} or false (missing)
-local playing = {}     -- {ev, untilMs}
-local soundsThisSecond, soundSecond = 0, 0
-local MAX_PLAYING = 48
+local playing = {}     -- {ev, untilMs, important}
+local MAX_SCREAMS, SCREAM_GAP_MS, MAX_IMPORTANT = 3, 250, 16
+local lastScreamMs = -1e9
 local function realMs() return os.preciseClock() * 1000 end
 
 -- Length of a PCM WAV in ms (RIFF 'fmt ' byte rate, 'data' size); 3 s if it can't be read.
@@ -176,11 +178,10 @@ end
 
 -- Disposes the events of sounds that have finished.
 local function cleanSounds()
-  local now, keep = realMs(), {}
-  for _, p in ipairs(playing) do
-    if now >= p.untilMs then p.ev:dispose() else keep[#keep + 1] = p end
+  local now = realMs()
+  for i = #playing, 1, -1 do
+    if now >= playing[i].untilMs then playing[i].ev:dispose() table.remove(playing, i) end
   end
-  playing = keep
 end
 
 local function playSoundAt(id, x, y, z, important)
@@ -188,29 +189,22 @@ local function playSoundAt(id, x, y, z, important)
   local s = data.sounds[id]
   if not s then return end
   if (sim.cameraPosition.x - x) ^ 2 + (sim.cameraPosition.z - z) ^ 2 > 150 * 150 then return end
-  if not important then
-    local sec = math.floor(realMs() / 1000)
-    if sec ~= soundSecond then soundSecond, soundsThisSecond = sec, 0 end
-    if soundsThisSecond >= 20 then return end
-    soundsThisSecond = soundsThisSecond + 1
-  end
+  local now = realMs()
+  if not important and now - lastScreamMs < SCREAM_GAP_MS then return end
+  cleanSounds()
+  local n = 0
+  for _, p in ipairs(playing) do if p.important == important then n = n + 1 end end
+  if n >= (important and MAX_IMPORTANT or MAX_SCREAMS) then return end
   local file = data.soundDir .. s.file
   local a = audioFor(file)
   if not a then return end
-  cleanSounds()
-  if #playing >= MAX_PLAYING then
-    if not important then return end
-    -- make room: the sound closest to finishing goes
-    local first = 1
-    for i, p in ipairs(playing) do if p.untilMs < playing[first].untilMs then first = i end end
-    playing[first].ev:dispose()
-    table.remove(playing, first)
-  end
+  if not important then lastScreamMs = now end
   local ev = newEvent(file)
   ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
   ev:start()
-  playing[#playing + 1] = {ev = ev, untilMs = realMs() + a.length + 500}
+  -- disposed well after the end (a generous margin: disposing a sound still playing would cut it)
+  playing[#playing + 1] = {ev = ev, untilMs = now + a.length * 1.25 + 1000, important = important}
 end
 -- splats and the sounds of dying peds always play
 pedlogic.playSound = function(ped, id) playSoundAt(id, ped.x, ped.y, ped.z, id == 4020 or pedlogic.isDead(ped)) end

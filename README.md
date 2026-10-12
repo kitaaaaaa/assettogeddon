@@ -37,6 +37,9 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 - **Corpses**: running over one again bursts it and puts blood on the wheels that touched it, which leave red
   tyre tracks for a few metres. Tracks fade after 30 s. Dead peds come back elsewhere after a while
   (adjustable, or never).
+- **Sounds**: at most 3 pedestrian screams play at once, started at least 0.25 s apart, so a crowd scattering
+  in front of a car isn't a wall of noise; splats and death sounds have room for 16. A sound that has started
+  always plays to the end.
 - **Scoring**, per car (the app window shows the table; the HUD shows the car you're watching): the ped's
   credit value from the game data, the combo multiplier for kills within a second of each other (up to 5x),
   x2 when the ped explodes, and the bonuses with C1's banners:

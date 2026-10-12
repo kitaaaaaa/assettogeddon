@@ -23,6 +23,7 @@ assert(H.decoded > 0, 'textures decoded')
 
 -- drive both cars along the track at 25 m/s through the pedestrians for 20 s
 local rays0 = H.rays or 0
+local maxScreams = 0
 for _ = 1, 1200 do
   for i = 0, 1 do
     local c = H.cars[i]
@@ -30,7 +31,11 @@ for _ = 1, 1200 do
   end
   H.sim.cameraPosition:set(H.cars[0].position.x, 2, H.cars[0].position.z - 6)
   H.frame()
+  local screams = 0
+  for _, p in ipairs(H.state().playing) do if not p.important then screams = screams + 1 end end
+  maxScreams = math.max(maxScreams, screams)
 end
+print('max screams at once: ' .. maxScreams)
 local raysPerFrame = ((H.rays or 0) - rays0) / 1200
 -- piledriver: car 0 runs a ped down at 15 m/s and goes straight into a wall with it on the front
 do
@@ -116,6 +121,7 @@ for _ = 1, 120 do H.frame() end
 lightHit()
 check(#H.state().projectiles >= 1, 'hitting something movable launches an object')
 check(H.audioCreated > 0, 'audio events created')
+check(maxScreams >= 1 and maxScreams <= 3, 'screams play, at most 3 at once: got ' .. maxScreams)
 -- finished sounds are disposed: after a quiet spell only the kept (unplayed) one per file is left
 H.sim.cameraPosition:set(5000, 2, 5000)
 local files = 0
