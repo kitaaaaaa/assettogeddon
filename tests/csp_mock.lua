@@ -117,6 +117,13 @@ return function(opts)
         assert(not disposed, 'disposed audio event started')
         assert(params.loop or not started, 'one-shot audio event started twice (it only plays once)')
         started = H.time
+        -- CSP shares one loaded copy between events with the same parameters, and a copy plays once at a
+        -- time: starting it again cuts off the one playing
+        local key = params.filename .. '|' .. tostring(params.minDistance)
+        H.copies = H.copies or {}
+        local other = H.copies[key]
+        if other and other ~= ev and other:isValid() then H.cutShort = (H.cutShort or 0) + 1 end
+        H.copies[key] = ev
         H.logs[#H.logs + 1] = 'sound ' .. params.filename
       end
       function ev:dispose()

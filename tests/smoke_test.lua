@@ -128,7 +128,7 @@ H.sim.cameraPosition:set(5000, 2, 5000)
 local files = 0
 for _ in pairs(H.state().audioFiles) do files = files + 1 end
 for _ = 1, 600 do H.frame() end
-check(H.audioLive <= files, ('finished sounds disposed: %d events live, %d files'):format(H.audioLive, files))
+check(H.audioLive <= files * 4, ('finished sounds disposed: %d events live, %d files (4 copies each)'):format(H.audioLive, files))
 
 print(failures == 0 and 'smoke test passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)
