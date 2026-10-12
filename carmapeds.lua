@@ -334,7 +334,19 @@ local function splineAvailable()
   return hasSpline
 end
 
--- A random spot on (or just beside) the track, from the seeded generator r. Also returns the track direction.
+-- Is the ground at (x, y, z) flat enough to stand on (under ~30 degrees: not a wall top, bank or barrier)?
+local function standable(x, y, z)
+  for _, d in ipairs({{1, 0}, {0, 1}}) do
+    local gy = pedlogic.groundBelow(ray, x + d[1], y + 1.5, z + d[2], 3)
+    if not gy or math.abs(gy - y) > 0.6 then return false end
+  end
+  return true
+end
+
+-- A random spot from the seeded generator r: half on the track (and just beside it), half anywhere on the
+-- surfaces cars can touch (grass, run-off, car parks, verges...) within 50 m of it. Also returns the track
+-- direction.
+local OFF_TRACK = 50
 local function randomSpot(r)
   for _ = 1, 30 do
     if splineAvailable() then
@@ -346,10 +358,12 @@ local function randomSpot(r)
         local fwd = (n - c):normalize()
         local side = fwd:clone():cross(vecUp):normalize()  -- as CSP's DynamicReturn: sides.x lies along this
         local s = ac.getTrackAISplineSides(p)
-        local lateral = -(s.y + 2) + (s.x + s.y + 4) * r()
+        local onTrack = r() < 0.5
+        local margin = onTrack and 2 or OFF_TRACK
+        local lateral = -(s.y + margin) + (s.x + s.y + 2 * margin) * r()
         local x, z = c.x + side.x * lateral, c.z + side.z * lateral
         local gy = pedlogic.groundBelow(ray, x, c.y + 30, z, 100)
-        if gy then return x, gy, z, fwd.x, fwd.z end
+        if gy and (onTrack or standable(x, gy, z)) then return x, gy, z, fwd.x, fwd.z end
       end
     else
       -- no AI spline: around the track's origin (still the same for everyone)

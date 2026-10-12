@@ -19,7 +19,8 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 
 ## What it does
 
-- **Pedestrians**: a few hundred (adjustable) on random spots across the track and just beside it, using every
+- **Pedestrians**: a few hundred (adjustable) on random spots: half on the track and just beside it, half anywhere
+  on the surfaces cars can touch (grass, run-off, verges...) within 50 m of it, where the ground is flat enough; using every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
   with the rest.
 - **Grid girls**: ped 19 (`RID.PIX`), the flagman's counterpart, is never placed at random. Up to 8 of her stand
@@ -30,6 +31,8 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   same layout (the grid area just before the start line is kept clear). The flagman is the exception: there's
   one, standing beside the track at the start/finish line, waving his flag from the start of the session (C1
   does it when the countdown ends).
+- **Idle animation**: standing peds look left and right (C1's idle animation) only within 30 m of the camera;
+  further away they stand still, as the constant fidgeting is distracting at a distance.
 - **Behaviour** (ported from [dethrace](https://github.com/dethrace-labs/dethrace)'s `pedestrn.c`): the game's
   danger level from each approaching car, its action choice (stand, walk, run, ...) by danger and chance,
   direction-dependent animation sequences and frame timing, sounds, gravity and fall damage. C1 peds walk along

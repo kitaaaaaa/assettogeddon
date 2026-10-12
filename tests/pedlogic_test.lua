@@ -169,6 +169,24 @@ p7.carriedBy, p7.carrierVx, p7.carrierVz = 9, 10, 0
 pedlogic.detach(p7)
 check(p7.vx > 0 and p7.midAir and not p7.carriedBy, 'released corpse keeps momentum')
 
+-- a standing ped's idle animation (variable rate, frame and mirror image) plays only near the camera
+do
+  local idleDef = setmetatable({sequences = {}}, {__index = def})
+  for i, q in ipairs(def.sequences) do idleDef.sequences[i] = q end
+  idleDef.sequences[1] = {rate = 2, factor1 = 1, factor2 = 6, frames = {{name = 'S1', offsetX = 0, offsetY = 0},
+    {name = 'S1', offsetX = 0, offsetY = 0, flipped = true}}, loopingFrameStart = 0}
+  local function frames(camZ)
+    local p = pedlogic.new(idleDef, 900, straightPath(80, 0), 500, 0)
+    p.walkSpeed = 0
+    local seen, t = {}, 0
+    for _ = 1, 400 do t = t + 16 pedlogic.update(p, {now = t, dtMs = 16, cars = {}, camX = 80, camZ = camZ, ray = flat}) seen[p.frame] = true end
+    return seen
+  end
+  local near, far = frames(-10), frames(-200)
+  check(near[0] and near[1], 'idle animation plays near the camera')
+  check(far[0] and not far[1], 'idle animation holds still far from the camera')
+end
+
 -- a grid girl: calm, she stands with her sign up (forced sequence) before the start and lowered after it
 do
   local g = newPed(50, 0, 50, -5000)

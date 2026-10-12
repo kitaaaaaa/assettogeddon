@@ -96,6 +96,20 @@ check(fm and fm.flagman and fm.id == 0 and math.abs(fm.path.z[1] + 1000) < 3 and
   'flagman placed at the start line beside the track')
 check(fm and (fm.action == 7 or fm.hitPoints < 0 or fm.scared), 'flagman waving (or scared, or run over)')
 
+-- spawning: about half on the track (6 m each side of the mock spline, plus 2 m), the rest on the ground around
+-- it, never more than 50 m beyond its edge (path starts, as peds have walked since)
+local off, tooFar, total = 0, 0, 0
+for _, p in ipairs(st.peds) do
+  if not p.gridGirl and not p.flagman then
+    total = total + 1
+    local x0 = math.abs(p.path.x[1])
+    if x0 > 8 then off = off + 1 end
+    if x0 > 56.01 then tooFar = tooFar + 1 end
+  end
+end
+check(off > total * 0.3 and off < total * 0.6, ('peds off the track: %d of %d'):format(off, total))
+check(tooFar == 0, 'no ped further than 50 m from the track: ' .. tooFar)
+
 -- grid girls: beside every second grid slot (slots 0, 2, 4, 6, 8: the x = -2 column), on its outer side
 -- (x = -4.4), never among the random peds
 local girls, wrongPlace, randomRef19 = 0, 0, 0

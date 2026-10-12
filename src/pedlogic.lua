@@ -226,6 +226,8 @@ function M.mungeSequence(ped, actionChanged)
   end
 end
 
+M.IDLE_RADIUS = 30  -- m from the camera within which standing peds play their idle animation
+
 -- Returns an event when the fatal car impact animation ends ('detach').
 function M.mungeFrames(ped, now)
   local d = ped.def
@@ -239,6 +241,12 @@ function M.mungeFrames(ped, now)
   else
     offset = 0
     count = seq.loopingFrameStart
+  end
+  -- a standing ped's idle animation (its frame and the mirror image, swapped every 0.2-1 s: looking left and
+  -- right) only plays near the camera; further away it holds still, as the fidgeting is distracting at a distance
+  if ped.idleFar and seq.rate == 2 and ped.action == ped.calmStand then
+    ped.frame, ped.lastFrame = 0, now
+    return
   end
   local period
   if seq.rate == 1 then  -- speed
@@ -632,6 +640,7 @@ function M.update(ped, ctx)
   local seq = d.sequences[ped.sequence + 1]
   if ped.doneInitial and seq and #seq.frames == seq.loopingFrameStart then ped.doneInitial = false end
   ped.carToPed = atan2deg(ped.x - ctx.camX, ped.z - ctx.camZ)
+  ped.idleFar = (ped.x - ctx.camX) ^ 2 + (ped.z - ctx.camZ) ^ 2 > M.IDLE_RADIUS * M.IDLE_RADIUS
   local danger, dX, dZ = 0, 0, 0
   local changed = false
   local event
