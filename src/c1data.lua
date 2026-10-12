@@ -17,6 +17,8 @@ M.GIB_NAMES = {
 M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX', '2XCOMBO.PIX', '3XCOMBO.PIX',
   '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX'}
 M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVING_BASTARD_REF)
+-- Ped types never spawned: ref -> why
+M.EXCLUDED_REFS = {[32] = 'the hovering robot (RO1.PIX) does not fit with the rest'}
 
 -- GENERAL.TXT's "Cunning stunt bonus for each skill level" line (three values), found by its comment.
 function M.cunningStuntCredits(text, method)
@@ -144,7 +146,9 @@ function M.load(root, io, yield)
         end
       end
     end
-    if #p.sequences == 0 or #p.actions == 0 then warn(('pedestrian %d left out: no animation'):format(p.ref))
+    if M.EXCLUDED_REFS[p.ref] then
+      out.notes[#out.notes + 1] = ('pedestrian %d left out: %s'):format(p.ref, M.EXCLUDED_REFS[p.ref])
+    elseif #p.sequences == 0 or #p.actions == 0 then warn(('pedestrian %d left out: no animation'):format(p.ref))
     elseif found == 0 then warn(('pedestrian %d left out: none of its images found'):format(p.ref))
     elseif #missing > 0 then
       out.notes[#out.notes + 1] = ('pedestrian %d left out (as C1 would): %d image(s) missing from the data: %s')

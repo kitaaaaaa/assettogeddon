@@ -20,7 +20,8 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 ## What it does
 
 - **Pedestrians**: a few hundred (adjustable) on random spots across the track and just beside it, using every
-  pedestrian type in `DATA\PEDESTRN.TXT`. Placement comes from the track's name, so a track always gets the
+  pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
+  with the rest. Placement comes from the track's name, so a track always gets the
   same layout (the grid area just before the start line is kept clear). The flagman is the exception: there's
   one, standing beside the track at the start/finish line, waving his flag from the start of the session (C1
   does it when the countdown ends).
