@@ -127,12 +127,16 @@ local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z,
 -- written differently, SOUND/./X.WAV, SOUND/././X.WAV, ..., and minDistance differs a tiny bit), and a sound
 -- only starts on a copy that isn't playing; with none free, it's dropped. One unplayed event per copy is kept
 -- so it stays loaded.
+-- A sound starts muted and is turned up 60 ms (and at least 2 frames) later: CSP applies an event's 3D position
+-- and distance falloff a moment after it starts, so until then it plays at full volume (in recordings, the
+-- first 40-60 ms of every scream came out 14 dB too loud).
 -- Live peds' noises (screams) are limited to a few at once, started at least 250 ms apart, and a ped doesn't
 -- start one while its last one is playing, so a crowd reacting to a car isn't a wall of noise. Splats and
 -- death sounds have more room.
 local SLOTS = 4
 local audioFiles = {}  -- file -> {keep = {[slot] = unplayed event}} or false (missing)
-local playing = {}     -- {ev, started (ms), important, file, slot}
+local playing = {}     -- {ev, started (ms), important, file, slot, volume, pos, muteFrames}
+local UNMUTE_MS, UNMUTE_FRAMES = 60, 2
 local MAX_SCREAMS, SCREAM_GAP_MS, MAX_IMPORTANT = 3, 250, 16
 local lastScreamMs = -1e9
 local function realMs() return os.preciseClock() * 1000 end
@@ -169,11 +173,20 @@ local function preloadSounds()
   end
 end
 
--- Disposes the events of sounds that have finished (or, should one never report it, after 30 s).
-local function cleanSounds()
+-- Turns up sounds once their 3D settings are in place, and disposes the events of sounds that have finished
+-- (or, should one never report it, after 30 s). Called every frame.
+local function updateSounds()
   local now = realMs()
   for i = #playing, 1, -1 do
     local p = playing[i]
+    if p.muteFrames then
+      p.ev:setPosition(p.pos, vecUp, vec3(0, 0, 1), nil)
+      p.muteFrames = p.muteFrames - 1
+      if p.muteFrames <= 0 and now - p.started >= UNMUTE_MS then
+        p.ev.volume = p.volume
+        p.muteFrames = nil
+      end
+    end
     if not p.ev:isValid() or now - p.started > 30000 then
       p.ev:dispose()
       p.done = true
@@ -192,7 +205,7 @@ local function playSoundAt(id, x, y, z, important)
   if not important and now - lastScreamMs < SCREAM_GAP_MS then return nil end
   local file = data.soundDir .. s.file
   if not audioFor(file) then return nil end
-  cleanSounds()
+  updateSounds()
   local n, busy = 0, {}
   for _, p in ipairs(playing) do
     if p.important == important then n = n + 1 end
@@ -204,10 +217,12 @@ local function playSoundAt(id, x, y, z, important)
   if not slot then return nil end
   if not important then lastScreamMs = now end
   local ev = newEvent(file, slot)
-  ev.volume = settings.volume * (s.maxVolume or 255) / 255
-  ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
+  local pos = vec3(x, y + 1, z)
+  ev.volume = 0
+  ev:setPosition(pos, vecUp, vec3(0, 0, 1), nil)
   ev:start()
-  local p = {ev = ev, started = now, important = important, file = file, slot = slot}
+  local p = {ev = ev, started = now, important = important, file = file, slot = slot, pos = pos,
+    volume = settings.volume * (s.maxVolume or 255) / 255, muteFrames = UNMUTE_FRAMES}
   playing[#playing + 1] = p
   return p
 end
@@ -973,7 +988,7 @@ function script.update(dt)
   pedlogic.updateGibs(clockT, math.min(dt, 0.1) * 1000)
   if not replaying then writeReplay() end
   flushSends()
-  cleanSounds()
+  updateSounds()
 
   -- blood trails fade after 30 s
   if #bloodTrails > 0 and nowMs - bloodTrails[1][7] > 30000 then

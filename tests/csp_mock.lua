@@ -117,6 +117,10 @@ return function(opts)
         assert(not disposed, 'disposed audio event started')
         assert(params.loop or not started, 'one-shot audio event started twice (it only plays once)')
         started = H.time
+        -- CSP applies the 3D position a moment after start: a sound must start muted
+        if (ev.volume or 1) > 0 then H.loudStarts = (H.loudStarts or 0) + 1 end
+        H.startedEvents = H.startedEvents or {}
+        H.startedEvents[#H.startedEvents + 1] = ev
         -- CSP shares one loaded copy between events with the same parameters, and a copy plays once at a
         -- time: starting it again cuts off the one playing
         local key = params.filename .. '|' .. tostring(params.minDistance)
