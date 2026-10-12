@@ -20,6 +20,9 @@ M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVI
 -- Frames PEDESTRN.TXT names wrongly, and the ped's own file's frame used instead: ref -> {name -> name}.
 -- Ped 19's file has RIDSHK1/RIDSHK2 and RIDSTL2, the data asks for RIDSHK and RIDSTIL2 (so C1 never used her).
 M.FRAME_FIXES = {[19] = {['RIDSHK.PIX'] = 'RIDSHK1.PIX', ['RIDSTIL2.PIX'] = 'RIDSTL2.PIX'}}
+-- The grid girl (ped 19): several stand at the starting grid, holding up her GET READY sign (sequence 8) until
+-- the race starts, then standing with it lowered (sequence 4). Never placed at random.
+M.GRID_GIRL = {ref = 19, signSequence = 8, standSequence = 4}
 -- Ped types never spawned: ref -> why
 M.EXCLUDED_REFS = {[32] = 'the hovering robot (RO1.PIX) does not fit with the rest'}
 

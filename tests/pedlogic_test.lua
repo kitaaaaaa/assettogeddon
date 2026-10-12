@@ -169,5 +169,19 @@ p7.carriedBy, p7.carrierVx, p7.carrierVz = 9, 10, 0
 pedlogic.detach(p7)
 check(p7.vx > 0 and p7.midAir and not p7.carriedBy, 'released corpse keeps momentum')
 
+-- a grid girl: calm, she stands with her sign up (forced sequence) before the start and lowered after it
+do
+  local g = newPed(50, 0, 50, -5000)
+  g.gridGirl, g.walkSpeed = {signSequence = 1, standSequence = 0}, 0
+  local t = -5000
+  for _ = 1, 30 do t = t + 16 pedlogic.update(g, {now = t, dtMs = 16, cars = {}, camX = 50, camZ = 30, ray = flat}) end
+  check(g.action == g.calmStand and g.sequence == 1, 'grid girl: sign up before the start (sequence ' .. g.sequence .. ')')
+  local x0 = g.x
+  t = 0
+  for _ = 1, 300 do t = t + 16 pedlogic.update(g, {now = t, dtMs = 16, cars = {}, camX = 50, camZ = 30, ray = flat}) end
+  check(g.action == g.calmStand and g.sequence == 0, 'grid girl: sign down after the start (sequence ' .. g.sequence .. ')')
+  check(g.x == x0, 'grid girl: stays at her place')
+end
+
 print(failures == 0 and 'all pedlogic tests passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)

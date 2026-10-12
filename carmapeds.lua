@@ -388,15 +388,70 @@ local function spawnFlagman(def)
   return nil
 end
 
+-- Positions of the track's numbered spawn nodes (AC_START_0, AC_START_1, ... or AC_PIT_...), with their look
+-- direction. The same on every client: they come from the track's model.
+local function spawnNodes(prefix)
+  local list = {}
+  for i = 0, 63 do
+    local ok, m = pcall(function() return ac.findNodes(prefix .. i):getWorldTransformationRaw() end)
+    if not ok or not m then break end
+    list[#list + 1] = {x = m.position.x, y = m.position.y, z = m.position.z, lx = m.look.x, lz = m.look.z}
+  end
+  return list
+end
+
+-- Grid girls (ped 19): beside every second grid slot (up to 8), on the side away from the other grid column,
+-- 2.4 m from the car's middle. Pit boxes if the track has no grid. Each gets a short path leading away from
+-- the slot, to run along when scared; calm, she stands at its start.
+local GRID_GIRLS = 8
+local function spawnGridGirls(def, firstId)
+  local slots = spawnNodes('AC_START_')
+  if #slots == 0 then slots = spawnNodes('AC_PIT_') end
+  local out = {}
+  for i = 1, #slots, 2 do
+    if #out >= GRID_GIRLS then break end
+    local sl = slots[i]
+    local ll = math.sqrt(sl.lx * sl.lx + sl.lz * sl.lz)
+    if ll > 0 then
+      local sx, sz = -sl.lz / ll, sl.lx / ll  -- across the slot
+      -- the other column: the next (or previous) slot; stand on the far side from it
+      local o = slots[i + 1] or slots[i - 1]
+      local pref = 1
+      if o and (o.x - sl.x) * sx + (o.z - sl.z) * sz > 0 then pref = -1 end
+      for _, side in ipairs({pref, -pref}) do
+        local dx, dz = sx * side, sz * side
+        local x, z = sl.x + dx * 2.4, sl.z + dz * 2.4
+        local gy = pedlogic.groundBelow(ray, x, sl.y + 3, z, 6)
+        local wall = ray(sl.x, sl.y + 0.5, sl.z, dx, 0, dz, 2.6)
+        if gy and math.abs(gy - sl.y) < 1.5 and wall < 0 then
+          local id = firstId + #out
+          local r = rng.new(pedSeed(id))
+          local path = paths.generate(r, ray, x, gy, z, dx, dz)
+          local ped = pedlogic.new(def, id, path, pedSeed(id), 0)
+          ped.gridGirl = c1data.GRID_GIRL
+          ped.walkSpeed = 0
+          ped.s, ped.initialS, ped.anchor.s0 = 0, 0, 0
+          pedlogic.placeOnPath(ped)
+          out[#out + 1] = ped
+          break
+        end
+      end
+    end
+  end
+  return out
+end
+
 -- Builds all peds (a coroutine: path generation raycasts are spread over frames).
 local function populateTask(pedCount)
   seed = rng.hash(ac.getTrackFullID('/'))
   local spawnRandom = rng.new(seed)
   pedlogic.setRandom(rng.new(seed + 1))
   local list, byId = {}, {}
-  local randomTypes, flagmanType = {}, nil
+  local randomTypes, flagmanType, gridGirlType = {}, nil, nil
   for _, def in ipairs(data.peds) do
-    if def.ref == c1data.FLAGMAN_REF then flagmanType = def else randomTypes[#randomTypes + 1] = def end
+    if def.ref == c1data.FLAGMAN_REF then flagmanType = def
+    elseif def.ref == c1data.GRID_GIRL.ref then gridGirlType = def
+    else randomTypes[#randomTypes + 1] = def end
   end
   if #randomTypes == 0 then randomTypes = data.peds end
   if flagmanType then
@@ -412,6 +467,9 @@ local function populateTask(pedCount)
       list[#list + 1], byId[id] = ped, ped
     end
     if id % 10 == 0 then coroutine.yield() end
+  end
+  if gridGirlType then
+    for _, g in ipairs(spawnGridGirls(gridGirlType, pedCount + 1)) do list[#list + 1], byId[g.id] = g, g end
   end
   return list, byId
 end
@@ -895,7 +953,10 @@ function script.update(dt)
     elseif coroutine.status(populating) == 'dead' then
       populating = nil
       peds, pedsById = list, byId
-      log(('placed %d pedestrians (seed %d)%s'):format(#peds, seed, pedsById[0] and ', flagman at the start line' or ''))
+      local girls = 0
+      for _, p in ipairs(peds) do if p.gridGirl then girls = girls + 1 end end
+      log(('placed %d pedestrians (seed %d)%s, %d grid girls'):format(#peds, seed,
+        pedsById[0] and ', flagman at the start line' or '', girls))
       if not replayStream then openReplayStream() end
       simT = nil
     end

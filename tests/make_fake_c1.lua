@@ -70,6 +70,11 @@ local n0 = #lines
 for i = 2, n0 - 1 do lines[#lines + 1] = lines[i] end
 lines[#lines + 1] = 'NEXT PEDESTRIAN'
 table.insert(lines, n0 + 1, '99')
+-- the grid girl (ref 19): the same ped again
+local n1 = #lines
+for i = 2, n0 - 1 do lines[#lines + 1] = lines[i] end
+lines[#lines + 1] = 'NEXT PEDESTRIAN'
+table.insert(lines, n1 + 1, '19')
 lines[#lines + 1] = 'END OF PEDESTRIANS'
 -- encrypt every other line, as the real files mix both
 for i = 2, #lines, 2 do lines[i] = '@' .. c1text.decode(lines[i], 2) end

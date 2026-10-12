@@ -102,6 +102,12 @@ return function(opts)
     getTrackFullID = function(sep) return 'ks_test' .. sep .. 'layout' end,
     trackProgressToWorldCoordinate = function(p) return vec3(0, 0, p * 2000 - 1000) end,
     getTrackAISplineSides = function(p) return vec2(6, 6) end,
+    -- the track's grid: AC_START_0..9, two staggered columns (x = -2 / +2), 8 m apart, behind the start line
+    findNodes = function(name)
+      local i = tonumber(name:match('^AC_START_(%d+)$'))
+      local m = i and i < 10 and {position = vec3(i % 2 == 0 and -2 or 2, 0, -1000 - 8 - 4 * i), look = vec3(0, 0, 1)}
+      return {getWorldTransformationRaw = function() return m or nil end}
+    end,
     getDriverName = function(i) return 'Driver ' .. i end,
     StructItem = S,
     AudioEvent = {fromFile = function(params)

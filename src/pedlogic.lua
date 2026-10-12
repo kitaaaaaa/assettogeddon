@@ -203,6 +203,9 @@ function M.mungeSequence(ped, actionChanged)
   for i = 1, #a.bearings do
     if diff <= a.bearings[i].maxBearing then
       local seqIndex = a.bearings[i].sequence
+      if ped.forceSequence and ped.action == ped.calmStand and d.sequences[ped.forceSequence + 1] then
+        seqIndex = ped.forceSequence
+      end
       if ped.sequence ~= seqIndex and d.sequences[seqIndex + 1] then
         local newSeq = d.sequences[seqIndex + 1]
         local curLooping = d.sequences[ped.sequence + 1].loopingFrameStart
@@ -333,6 +336,11 @@ function M.mungePath(ped, danger, dX, dZ, dtMs, ray, now)
       local s, dir, walking = schedule.calm(ped, now)
       ped.s, ped.pathDir = s, dir
       local want = walking and ped.calmWalk or ped.calmStand
+      -- a grid girl stands at her place: sign up before the start, down after it
+      if ped.gridGirl then
+        want = ped.calmStand
+        ped.forceSequence = now < 0 and ped.gridGirl.signSequence or ped.gridGirl.standSequence
+      end
       -- the flagman waves his flag from the start of the session (C1: when the countdown ends)
       if ped.flagman and now >= 0 and #d.actions >= 8 then want = 7 end
       if want ~= ped.action then M.changeActionTo(ped, want, true, now) end

@@ -22,8 +22,11 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 - **Pedestrians**: a few hundred (adjustable) on random spots across the track and just beside it, using every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
   with the rest.
-  Ped 19 (`RID.PIX`) is in, though C1 itself can't load her: PEDESTRN.TXT asks for two frames under names her file
-  doesn't have (RIDSHK, RIDSTIL2), so her own RIDSHK1 and RIDSTL2 are used. Placement comes from the track's name, so a track always gets the
+- **Grid girls**: ped 19 (`RID.PIX`), the flagman's counterpart, is never placed at random. Up to 8 of her stand
+  at the starting grid, beside every second grid slot on the outside (at the pit boxes if the track has no
+  grid), holding up her GET READY sign until the race starts, then standing with it lowered. Scared, she runs
+  like any other ped; she comes back to her place when she respawns. C1 itself can't load her: PEDESTRN.TXT asks
+  for two frames under names her file doesn't have (RIDSHK, RIDSTIL2), so her own RIDSHK1 and RIDSTL2 are used. Placement comes from the track's name, so a track always gets the
   same layout (the grid area just before the start line is kept clear). The flagman is the exception: there's
   one, standing beside the track at the start/finish line, waving his flag from the start of the session (C1
   does it when the countdown ends).

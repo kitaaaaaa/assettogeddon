@@ -6,6 +6,8 @@ local fakeRoot = assert(arg[1], 'usage: smoke_test.lua <fake C1 dir>')
 local failures = 0
 local function check(cond, msg) if not cond then failures = failures + 1 print('FAIL: ' .. msg) end end
 
+local c1data = require('src/c1data')
+c1data.GRID_GIRL.signSequence, c1data.GRID_GIRL.standSequence = 1, 0  -- the fake ped has 3 sequences
 local H = require('tests/csp_mock')({dataDir = fakeRoot})
 H.makeCar(0, 0, -900, 0)
 H.makeCar(1, 3, -950, 0)
@@ -93,6 +95,20 @@ local fm = flagmen[1]
 check(fm and fm.flagman and fm.id == 0 and math.abs(fm.path.z[1] + 1000) < 3 and math.abs(math.abs(fm.path.x[1]) - 7.5) < 0.01,
   'flagman placed at the start line beside the track')
 check(fm and (fm.action == 7 or fm.hitPoints < 0 or fm.scared), 'flagman waving (or scared, or run over)')
+
+-- grid girls: beside every second grid slot (slots 0, 2, 4, 6, 8: the x = -2 column), on its outer side
+-- (x = -4.4), never among the random peds
+local girls, wrongPlace, randomRef19 = 0, 0, 0
+for _, p in ipairs(st.peds) do
+  if p.gridGirl then
+    girls = girls + 1
+    local x0, z0 = p.path.x[1], p.path.z[1]
+    if math.abs(x0 + 4.4) > 0.01 or (z0 + 1008) % 8 > 0.01 then wrongPlace = wrongPlace + 1 end
+  elseif p.def.ref == 19 then randomRef19 = randomRef19 + 1 end
+end
+check(girls == 5, 'grid girls at every second grid slot: got ' .. girls)
+check(wrongPlace == 0, 'grid girls beside their slot on the outer side: ' .. wrongPlace .. ' misplaced')
+check(randomRef19 == 0, 'the grid girl is never placed at random: ' .. randomRef19)
 
 -- cunning stunt: car 1 rolls onto its roof and back onto its wheels
 local c1 = H.cars[1]
