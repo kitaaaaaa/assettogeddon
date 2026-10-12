@@ -48,11 +48,29 @@ local function startLoading()
   if settings.c1Path == '' then loadError = 'Set your Carmageddon folder in the settings.' return end
   loader = coroutine.create(function()
     local io_ = {
-      read = function(path) return io.fileExists(path) and io.load(path) or nil end,
       exists = function(path) return io.fileExists(path) end,
     }
+    -- io.load first, then plain io.open as a fallback; failures are described for the error message
+    function io_.read(path)
+      if not io.fileExists(path) then io_.lastError = 'file not found' return nil end
+      local ok, res = pcall(io.load, path)
+      if ok and type(res) == 'string' and #res > 0 then return res end
+      local why = ok and (res == nil and 'io.load returned nothing' or ('io.load returned %s bytes'):format(type(res) == 'string' and #res or type(res)))
+        or ('io.load failed: ' .. tostring(res))
+      local f, ferr = io.open(path, 'rb')
+      if f then
+        local s = f:read('*a')
+        f:close()
+        if s and #s > 0 then return s end
+        why = why .. '; io.open read nothing'
+      else
+        why = why .. '; io.open: ' .. tostring(ferr)
+      end
+      io_.lastError = why
+      return nil
+    end
     local d, err = c1data.load(settings.c1Path, io_, coroutine.yield)
-    if not d then loadError = err return end
+    if not d then loadError = err log(err) return end
     local n = 0
     for name, img in pairs(d.images) do
       if img then
@@ -595,7 +613,9 @@ function script.windowMain(dt)
   if loader then
     ui.text('Loading Carmageddon data...')
   elseif loadError then
-    ui.textColored(loadError, rgbm(1, 0.4, 0.3, 1))
+    ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 0.4, 0.3, 1))
+    ui.textWrapped(loadError)
+    ui.popStyleColor()
   elseif data then
     local alive, dead = 0, 0
     for _, p in ipairs(peds) do if pedlogic.isDead(p) then dead = dead + 1 else alive = alive + 1 end end

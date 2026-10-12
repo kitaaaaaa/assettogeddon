@@ -79,12 +79,19 @@ ui = {
   drawImage = function(tex, a, b) assert(tex and a.x and b.x) end,
   Alignment = {Start = 0, Center = 1, End = 2},
   text = function(s) assert(type(s) == 'string') end, textColored = function(s) assert(type(s) == 'string') end,
+  textWrapped = function(s) assert(type(s) == 'string') LAST_WRAPPED = s end,
+  pushStyleColor = function() end, popStyleColor = function() end, StyleColor = {Text = 0},
   separator = function() end, sameLine = function() end, button = function() return false end,
   inputText = function(label, v) return v end, slider = function(label, v) return v end, checkbox = function() return false end,
   InputTextFlags = {Placeholder = 1},
 }
-io.fileExists = function(p) local f = io.open(p, 'rb') if f then f:close() return true end return false end
-io.load = function(p) local f = io.open(p, 'rb') if not f then return nil end local s = f:read('*a') f:close() return s end
+local realOpen = io.open
+io.fileExists = function(p) local f = realOpen(p, 'rb') if f then f:close() return true end return false end
+io.load = function(p)
+  if os.getenv('MOCK_IOLOAD_NIL') then return nil end  -- io.load refusing (e.g. outside allowed folders)
+  local f = realOpen(p, 'rb') if not f then return nil end local s = f:read('*a') f:close() return s
+end
+if os.getenv('MOCK_IOOPEN_DENIED') then io.open = function() return nil, 'Not allowed' end end
 script = {}
 
 local function makeCar(i, x, z, vz)
@@ -115,6 +122,12 @@ local function frame()
   script.windowSettings(dt)
 end
 for _ = 1, 400 do frame() end
+if os.getenv('EXPECT_ERROR') then
+  print('error shown: ' .. tostring(LAST_WRAPPED))
+  assert(LAST_WRAPPED and LAST_WRAPPED:find(os.getenv('EXPECT_ERROR'), 1, true), 'expected error message')
+  print('smoke test passed (error case)')
+  return
+end
 assert(decoded > 0, 'textures decoded')
 -- drive both cars along the track at 25 m/s through the pedestrians for 20 s
 for _ = 1, 1200 do

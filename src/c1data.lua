@@ -30,7 +30,8 @@ function M.findDataDir(root, exists)
   return nil
 end
 
--- io: {read = function(path) -> string|nil, exists = function(path) -> bool}; yield: optional, called now and
+-- io: {read = function(path) -> string|nil, exists = function(path) -> bool, lastError = string (why the last
+-- read failed, optional)}; yield: optional, called now and
 -- then so a coroutine can spread the work over frames. Returns data or nil, error.
 function M.load(root, io, yield)
   yield = yield or function() end
@@ -40,11 +41,21 @@ function M.load(root, io, yield)
   local function warn(s) out.warnings[#out.warnings + 1] = s end
 
   out.method = c1text.detectMethod(io.read(data .. '/GENERAL.TXT'))
-  local pal = io.read(data .. '/REG/PALETTES/DRRENDER.PAL')
-  out.palette = pal and pix.palette(pal)
-  if not out.palette then return nil, 'can\'t read DATA/REG/PALETTES/DRRENDER.PAL' end
+  local palPath = data .. '/REG/PALETTES/DRRENDER.PAL'
+  local pal = io.read(palPath)
+  if not pal then
+    return nil, ('can\'t read %s (%s)'):format(palPath, io.lastError or 'unknown error')
+  end
+  out.palette = pix.palette(pal)
+  if not out.palette then
+    local maps = pix.parse(pal)
+    return nil, ('%s: unexpected contents (%d bytes, %d pixelmaps, first bytes %s)'):format(palPath, #pal, #maps,
+      (pal:sub(1, 16):gsub('.', function(c) return ('%02X '):format(c:byte()) end)))
+  end
 
-  local peds, w = peddata.parse(assert(io.read(data .. '/PEDESTRN.TXT')), out.method)
+  local pedText = io.read(data .. '/PEDESTRN.TXT')
+  if not pedText then return nil, ('can\'t read %s/PEDESTRN.TXT (%s)'):format(data, io.lastError or 'unknown error') end
+  local peds, w = peddata.parse(pedText, out.method)
   for _, s in ipairs(w) do warn(s) end
 
   local soundTxt = io.read(data .. '/SOUND/SOUND.TXT')
