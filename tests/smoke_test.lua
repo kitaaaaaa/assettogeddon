@@ -121,6 +121,7 @@ for _ = 1, 120 do H.frame() end
 lightHit()
 check(#H.state().projectiles >= 1, 'hitting something movable launches an object')
 check(H.audioCreated > 0, 'audio events created')
+check((H.cutShort or 0) == 0, 'no sound disposed while still playing: ' .. (H.cutShort or 0))
 check(maxScreams >= 1 and maxScreams <= 3, 'screams play, at most 3 at once: got ' .. maxScreams)
 -- finished sounds are disposed: after a quiet spell only the kept (unplayed) one per file is left
 H.sim.cameraPosition:set(5000, 2, 5000)

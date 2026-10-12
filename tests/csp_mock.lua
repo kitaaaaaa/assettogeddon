@@ -109,15 +109,22 @@ return function(opts)
       assert(params.filename and params.use3D ~= nil, 'audio params')
       -- as in CSP: a one-shot event from a file plays once, then it's invalid
       local ev, started, disposed = {volume = 1}, false, false
+      -- valid until disposed, or (one-shot) until it has played: the fake sounds last 1 s
+      function ev:isValid() return not disposed and (params.loop or not started or H.time < started + 1) end
       H.audioLive = (H.audioLive or 0) + 1
       function ev:setPosition(p) assert(p.x, 'position') assert(not disposed, 'disposed audio event used') end
       function ev:start()
         assert(not disposed, 'disposed audio event started')
         assert(params.loop or not started, 'one-shot audio event started twice (it only plays once)')
-        started = true
+        started = H.time
         H.logs[#H.logs + 1] = 'sound ' .. params.filename
       end
-      function ev:dispose() if not disposed then disposed = true H.audioLive = H.audioLive - 1 end end
+      function ev:dispose()
+        if disposed then return end
+        if started and ev:isValid() then H.cutShort = (H.cutShort or 0) + 1 end  -- disposed while still playing
+        disposed = true
+        H.audioLive = H.audioLive - 1
+      end
       return ev
     end},
     ReplayStream = function(layout, onEnd)

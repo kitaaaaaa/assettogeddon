@@ -120,33 +120,16 @@ end
 local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z, 6) end
 -- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. A one-shot CSP audio event made from a file
 -- plays only once (CSP docs: it "will become invalid once played once"), so every sound gets a new event,
--- disposed once it has finished (length from the WAV header). CSP keeps the loaded file for the next one;
+-- disposed once CSP says it has finished (isValid() turns false). CSP keeps the loaded file for the next one;
 -- one unplayed event per file is kept so it stays loaded. A sound that has started is never cut off: when
 -- there's no room, the new one is dropped. Live peds' noises (screams) are limited to a few at once, started
 -- at least 250 ms apart, so a crowd reacting to a car doesn't become a wall of noise (and doesn't make the
 -- game's audio engine steal voices, which cuts sounds short). Splats and death sounds have more room.
-local audioFiles = {}  -- file -> {keep = unplayed event, length = ms} or false (missing)
-local playing = {}     -- {ev, untilMs, important}
+local audioFiles = {}  -- file -> {keep = unplayed event} or false (missing)
+local playing = {}     -- {ev, started (ms), important}
 local MAX_SCREAMS, SCREAM_GAP_MS, MAX_IMPORTANT = 3, 250, 16
 local lastScreamMs = -1e9
 local function realMs() return os.preciseClock() * 1000 end
-
--- Length of a PCM WAV in ms (RIFF 'fmt ' byte rate, 'data' size); 3 s if it can't be read.
-local function wavLength(path)
-  local f = io.open(path, 'rb')
-  local d = f and f:read('*a')
-  if f then f:close() end
-  if not d or d:sub(1, 4) ~= 'RIFF' then return 3000 end
-  local function le32(i) local a, b, c, e = d:byte(i, i + 3) return a + b * 256 + c * 65536 + e * 16777216 end
-  local p, byteRate, size = 13, nil, nil
-  while p + 7 <= #d do
-    local id, len = d:sub(p, p + 3), le32(p + 4)
-    if id == 'fmt ' then byteRate = le32(p + 16) elseif id == 'data' then size = len end
-    p = p + 8 + len + len % 2
-  end
-  if byteRate and size and byteRate > 0 then return size / byteRate * 1000 end
-  return 3000
-end
 
 local function newEvent(file)
   return ac.AudioEvent.fromFile({filename = file, use3D = true, loop = false, minDistance = 5, maxDistance = 150}, false)
@@ -156,7 +139,7 @@ local function audioFor(file)
   local a = audioFiles[file]
   if a == nil then
     if not io.fileExists(file) then audioFiles[file] = false return false end
-    a = {keep = newEvent(file), length = wavLength(file)}
+    a = {keep = newEvent(file)}
     audioFiles[file] = a
   end
   return a
@@ -176,11 +159,12 @@ local function preloadSounds()
   end
 end
 
--- Disposes the events of sounds that have finished.
+-- Disposes the events of sounds that have finished (or, should one never report it, after 30 s).
 local function cleanSounds()
   local now = realMs()
   for i = #playing, 1, -1 do
-    if now >= playing[i].untilMs then playing[i].ev:dispose() table.remove(playing, i) end
+    local p = playing[i]
+    if not p.ev:isValid() or now - p.started > 30000 then p.ev:dispose() table.remove(playing, i) end
   end
 end
 
@@ -203,8 +187,7 @@ local function playSoundAt(id, x, y, z, important)
   ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
   ev:start()
-  -- disposed well after the end (a generous margin: disposing a sound still playing would cut it)
-  playing[#playing + 1] = {ev = ev, untilMs = now + a.length * 1.25 + 1000, important = important}
+  playing[#playing + 1] = {ev = ev, started = now, important = important}
 end
 -- splats and the sounds of dying peds always play
 pedlogic.playSound = function(ped, id) playSoundAt(id, ped.x, ped.y, ped.z, id == 4020 or pedlogic.isDead(ped)) end
