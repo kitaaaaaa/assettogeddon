@@ -21,7 +21,9 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 
 - **Pedestrians**: a few hundred (adjustable) on random spots across the track and just beside it, using every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
-  with the rest. Placement comes from the track's name, so a track always gets the
+  with the rest.
+  Ped 19 (`RID.PIX`) is in, though C1 itself can't load her: PEDESTRN.TXT asks for two frames under names her file
+  doesn't have (RIDSHK, RIDSTIL2), so her own RIDSHK1 and RIDSTL2 are used. Placement comes from the track's name, so a track always gets the
   same layout (the grid area just before the start line is kept clear). The flagman is the exception: there's
   one, standing beside the track at the start/finish line, waving his flag from the start of the session (C1
   does it when the countdown ends).

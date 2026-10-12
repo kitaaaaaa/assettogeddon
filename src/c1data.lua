@@ -17,6 +17,9 @@ M.GIB_NAMES = {
 M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX', '2XCOMBO.PIX', '3XCOMBO.PIX',
   '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX'}
 M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVING_BASTARD_REF)
+-- Frames PEDESTRN.TXT names wrongly, and the ped's own file's frame used instead: ref -> {name -> name}.
+-- Ped 19's file has RIDSHK1/RIDSHK2 and RIDSTL2, the data asks for RIDSHK and RIDSTIL2 (so C1 never used her).
+M.FRAME_FIXES = {[19] = {['RIDSHK.PIX'] = 'RIDSHK1.PIX', ['RIDSTIL2.PIX'] = 'RIDSTL2.PIX'}}
 -- Ped types never spawned: ref -> why
 M.EXCLUDED_REFS = {[32] = 'the hovering robot (RO1.PIX) does not fit with the rest'}
 
@@ -138,8 +141,11 @@ function M.load(root, io, yield)
     -- C1 refuses to load a ped with a missing frame (fatal error), so its data can have types no track uses
     -- with frames missing (ref 19 in the original data): those are left out, noted in the log only
     local missing, found = {}, 0
+    local fixes = M.FRAME_FIXES[p.ref] or {}
     for _, s in ipairs(p.sequences) do
       for _, f in ipairs(s.frames) do
+        local fix = fixes[f.name:upper()]
+        if fix and not image(f.name) and image(fix) then f.name = fix end
         if image(f.name) then found = found + 1 elseif not missing[f.name] then
           missing[f.name] = true
           missing[#missing + 1] = f.name
