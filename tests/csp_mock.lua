@@ -16,6 +16,7 @@ return function(opts)
   function vec3mt:addScaled(v, k) self.x, self.y, self.z = self.x + v.x * k, self.y + v.y * k, self.z + v.z * k return self end
   function vec3mt:dot(v) return self.x * v.x + self.y * v.y + self.z * v.z end
   function vec3mt:length() return math.sqrt(self:dot(self)) end
+  function vec3mt:lengthSquared() return self:dot(self) end
   function vec3mt:distanceSquared(v) return (self.x - v.x) ^ 2 + (self.y - v.y) ^ 2 + (self.z - v.z) ^ 2 end
   function vec3mt:normalize() local l = self:length() if l > 0 then self:scale(1 / l) end return self end
   function vec3mt:cross(v) local x, y, z = self.y * v.z - self.z * v.y, self.z * v.x - self.x * v.z, self.x * v.y - self.y * v.x return self:set(x, y, z) end
@@ -106,9 +107,17 @@ return function(opts)
     AudioEvent = {fromFile = function(params)
       H.audioCreated = H.audioCreated + 1
       assert(params.filename and params.use3D ~= nil, 'audio params')
-      local ev = {volume = 1}
-      function ev:setPosition(p) assert(p.x, 'position') end
-      function ev:start() H.logs[#H.logs + 1] = 'sound ' .. params.filename end
+      -- as in CSP: a one-shot event from a file plays once, then it's invalid
+      local ev, started, disposed = {volume = 1}, false, false
+      H.audioLive = (H.audioLive or 0) + 1
+      function ev:setPosition(p) assert(p.x, 'position') assert(not disposed, 'disposed audio event used') end
+      function ev:start()
+        assert(not disposed, 'disposed audio event started')
+        assert(params.loop or not started, 'one-shot audio event started twice (it only plays once)')
+        started = true
+        H.logs[#H.logs + 1] = 'sound ' .. params.filename
+      end
+      function ev:dispose() if not disposed then disposed = true H.audioLive = H.audioLive - 1 end end
       return ev
     end},
     ReplayStream = function(layout, onEnd)

@@ -32,12 +32,35 @@ for _ = 1, 1200 do
   H.frame()
 end
 local raysPerFrame = ((H.rays or 0) - rays0) / 1200
--- a wall hit (piledriver path)
-H.cars[0].collisionDepth = 0.1
-H.cars[0].velocity:set(0, 0, 0)
-H.frame()
-H.cars[0].collisionDepth = 0
-H.frame()
+-- piledriver: car 0 runs a ped down at 15 m/s and goes straight into a wall with it on the front
+do
+  local c0 = H.cars[0]
+  local target
+  for _, p in ipairs(H.state().peds) do
+    if p.hitPoints >= 0 and not p.flagman and p.def.ref < 100 then target = p break end
+  end
+  local before = H.state().scores[0].credits
+  local z = target.z - 4
+  local killedAt
+  for f = 1, 120 do
+    if target.hitPoints < 0 and not killedAt then killedAt = f end
+    if killedAt and f >= killedAt + 3 then break end
+    z = z + 15 / 60
+    H.placeCar(0, target.x, z, 0, 15)
+    H.frame()
+  end
+  check(target.hitPoints < 0, 'piledriver: ped run down')
+  local killScore = H.state().scores[0].credits
+  c0.collisionDepth = 0.1 H.frame()
+  c0.velocity:set(0, 0, 4) c0.speedMs = 4 H.frame()  -- the crash takes a few frames
+  c0.velocity:set(0, 0, 0) c0.speedMs = 0
+  for _ = 1, 3 do H.frame() end
+  c0.collisionDepth = 0
+  for _ = 1, 15 do H.frame() end
+  check(target.piledriven, 'piledriver: scored for the pinned ped')
+  check(H.state().scores[0].credits > killScore, ('piledriver: credits %d -> %d -> %d'):format(before, killScore,
+    H.state().scores[0].credits))
+end
 
 local sounds, placed = 0, nil
 for _, l in ipairs(H.logs) do
@@ -81,7 +104,7 @@ local c0 = H.cars[0]
 local function lightHit()
   H.placeCar(0, c0.position.x, c0.position.z, 0, 20) H.frame()
   c0.collisionDepth = 0.05 H.frame()
-  c0.collisionDepth = 0 H.frame()
+  c0.collisionDepth = 0 for _ = 1, 12 do H.frame() end
 end
 for _ = 1, 200 do H.frame() end
 local n0 = #H.state().projectiles
@@ -92,7 +115,13 @@ H.walls = false
 for _ = 1, 120 do H.frame() end
 lightHit()
 check(#H.state().projectiles >= 1, 'hitting something movable launches an object')
-check(H.audioCreated > 0, 'audio voices created')
+check(H.audioCreated > 0, 'audio events created')
+-- finished sounds are disposed: after a quiet spell only the kept (unplayed) one per file is left
+H.sim.cameraPosition:set(5000, 2, 5000)
+local files = 0
+for _ in pairs(H.state().audioFiles) do files = files + 1 end
+for _ = 1, 600 do H.frame() end
+check(H.audioLive <= files, ('finished sounds disposed: %d events live, %d files'):format(H.audioLive, files))
 
 print(failures == 0 and 'smoke test passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)

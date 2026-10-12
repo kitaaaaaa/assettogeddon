@@ -102,7 +102,7 @@ function M.respawn(ped, now)
   ped.scared, ped.calmSince = false, nil
   ped.hitPoints, ped.speed, ped.action, ped.actionMode = d.hitPoints, 0, -1, -1
   ped.midAir, ped.fallingSpeed, ped.spinPeriod, ped.jump, ped.offsetY, ped.vx, ped.vz = false, 0, 0, 0, 0, 0, 0
-  ped.carriedBy, ped.carriedLocal, ped.killer, ped.deathTime, ped.satUpon, ped.collidedLastTime = nil, nil, nil, nil, false, false
+  ped.carriedBy, ped.carriedLocal, ped.killer, ped.deathTime, ped.satUpon, ped.collidedLastTime, ped.piledriven = nil, nil, nil, nil, false, false, nil
   ped.corpseSettled, ped.fallingSoundDone = nil, nil
   M.placeOnPath(ped)
   M.changeActionTo(ped, ped.calmStand, true, now)

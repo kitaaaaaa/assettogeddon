@@ -96,7 +96,6 @@ local function startLoading()
     for img in pairs(made) do img.rgba = nil end
     pedlogic.gibImages = d.gibs
     for _, w in ipairs(d.warnings) do log(w) end
-    for _, n in ipairs(d.notes) do log(n) end
     log(('loaded %d pedestrian types, %d images, %d sounds'):format(#d.peds, n, countKeys(d.sounds)))
     if #d.peds == 0 then
       local w = {}
@@ -119,12 +118,15 @@ local function ray(x, y, z, dx, dy, dz, len)
 end
 -- Ground height under (x, z), searching from a little above y. nil if no track surface there.
 local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z, 6) end
--- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. Each file gets a few voices; a voice is only
--- reused once its sound has finished (length from the WAV header), so a new sound never cuts or skips an
--- old one. Splats and death sounds always play; other ped noises are limited to 20 a second.
-local audioPool = {}  -- file -> {voices = {{ev, busyUntil}}, length} or false
+-- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. A one-shot CSP audio event made from a file
+-- plays only once (CSP docs: it "will become invalid once played once"), so every sound gets a new event,
+-- disposed once it has finished (length from the WAV header). CSP keeps the loaded file for the next one;
+-- one unplayed event per file is kept so it stays loaded. Splats and death sounds always play; other ped
+-- noises are limited to 20 a second, and at most 48 sounds play at once.
+local audioFiles = {}  -- file -> {keep = unplayed event, length = ms} or false (missing)
+local playing = {}     -- {ev, untilMs}
 local soundsThisSecond, soundSecond = 0, 0
-local MAX_VOICES_PER_FILE = 6
+local MAX_PLAYING = 48
 local function realMs() return os.preciseClock() * 1000 end
 
 -- Length of a PCM WAV in ms (RIFF 'fmt ' byte rate, 'data' size); 3 s if it can't be read.
@@ -144,22 +146,21 @@ local function wavLength(path)
   return 3000
 end
 
+local function newEvent(file)
+  return ac.AudioEvent.fromFile({filename = file, use3D = true, loop = false, minDistance = 5, maxDistance = 150}, false)
+end
+
 local function audioFor(file)
-  local pool = audioPool[file]
-  if pool == nil then
-    if not io.fileExists(file) then audioPool[file] = false return false end
-    pool = {voices = {}, length = wavLength(file)}
-    audioPool[file] = pool
+  local a = audioFiles[file]
+  if a == nil then
+    if not io.fileExists(file) then audioFiles[file] = false return false end
+    a = {keep = newEvent(file), length = wavLength(file)}
+    audioFiles[file] = a
   end
-  return pool
+  return a
 end
 
-local function newVoice(file)
-  return {ev = ac.AudioEvent.fromFile({filename = file, use3D = true, loop = false, minDistance = 5, maxDistance = 150}, false),
-    busyUntil = -1}
-end
-
--- Creates one voice per pedestrian sound up front, so the first play of each isn't lost to loading.
+-- Loads every pedestrian sound up front, so the first play of each isn't lost to loading.
 local function preloadSounds()
   local ids = {[4020] = true}
   for _, def in ipairs(data.peds) do
@@ -169,9 +170,17 @@ local function preloadSounds()
   end
   for id in pairs(ids) do
     local s = data.sounds[id]
-    local pool = s and audioFor(data.soundDir .. s.file)
-    if pool and #pool.voices == 0 then pool.voices[1] = newVoice(data.soundDir .. s.file) end
+    if s then audioFor(data.soundDir .. s.file) end
   end
+end
+
+-- Disposes the events of sounds that have finished.
+local function cleanSounds()
+  local now, keep = realMs(), {}
+  for _, p in ipairs(playing) do
+    if now >= p.untilMs then p.ev:dispose() else keep[#keep + 1] = p end
+  end
+  playing = keep
 end
 
 local function playSoundAt(id, x, y, z, important)
@@ -186,28 +195,22 @@ local function playSoundAt(id, x, y, z, important)
     soundsThisSecond = soundsThisSecond + 1
   end
   local file = data.soundDir .. s.file
-  local pool = audioFor(file)
-  if not pool then return end
-  local voice
-  for _, v in ipairs(pool.voices) do
-    if v.busyUntil <= realMs() then voice = v break end
+  local a = audioFor(file)
+  if not a then return end
+  cleanSounds()
+  if #playing >= MAX_PLAYING then
+    if not important then return end
+    -- make room: the sound closest to finishing goes
+    local first = 1
+    for i, p in ipairs(playing) do if p.untilMs < playing[first].untilMs then first = i end end
+    playing[first].ev:dispose()
+    table.remove(playing, first)
   end
-  if not voice then
-    if #pool.voices < MAX_VOICES_PER_FILE then
-      voice = newVoice(file)
-      pool.voices[#pool.voices + 1] = voice
-    elseif important then  -- all busy: take the one that finishes first
-      voice = pool.voices[1]
-      for _, v in ipairs(pool.voices) do if v.busyUntil < voice.busyUntil then voice = v end end
-    else
-      return
-    end
-  end
-  voice.busyUntil = realMs() + pool.length + 50
-  local ev = voice.ev
+  local ev = newEvent(file)
   ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
   ev:start()
+  playing[#playing + 1] = {ev = ev, untilMs = realMs() + a.length + 500}
 end
 -- splats and the sounds of dying peds always play
 pedlogic.playSound = function(ped, id) playSoundAt(id, ped.x, ped.y, ped.z, id == 4020 or pedlogic.isDead(ped)) end
@@ -250,12 +253,12 @@ local function carInfo(i, dt)
     local wh = c.wheels[w + 1]
     wh.x, wh.y, wh.z = wp.x, wp.y, wp.z
   end
-  -- impacts (for the piledriver and 'nice shot' bonuses): velocity change this frame
-  local dv = car.velocity - c.prevVel
-  c.prevVel:set(car.velocity)
+  -- impacts (for the piledriver and 'nice shot' bonuses). A crash takes the physics a few frames, so the
+  -- velocity change is measured from just before the contact over the next 150 ms, and the speed is the one
+  -- before it (after a wall the car may have stopped dead).
   c.impact = nil
   local colliding = car.collisionDepth > 0
-  if colliding and not c.wasColliding then
+  if colliding and not c.wasColliding and not c.contact then
     local nearCar = false
     for j = 0, sim.carsCount - 1 do
       if j ~= i then
@@ -263,8 +266,19 @@ local function carInfo(i, dt)
         if o and o.position:distanceSquared(car.position) < 36 then nearCar = true break end
       end
     end
-    if not nearCar then c.impact = {dv = dv, speed = c.speed} end
+    if not nearCar then c.contact = {vBefore = c.prevVel:clone(), speed = c.prevVel:length(), t = 0, dv = vec3()} end
   end
+  if c.contact then
+    local h = c.contact
+    h.t = h.t + dt
+    local dv = car.velocity - h.vBefore
+    if dv:lengthSquared() > h.dv:lengthSquared() then h.dv:set(dv) end
+    if h.t >= 0.15 then
+      c.impact = {dv = h.dv, speed = h.speed}
+      c.contact = nil
+    end
+  end
+  c.prevVel:set(car.velocity)
   c.wasColliding = colliding
   return c
 end
@@ -597,17 +611,33 @@ local function scoreEvent(c, credits, bannerDef)
   if credits > 0 then emit(events.score(clockT, c.sid, credits, bannerDef and bannerDef.index)) end
 end
 
-local function updateImpacts(c, carried)
+local function updateImpacts(c)
   if not c.impact then return end
   local dv = c.impact.dv
   local dvLen = dv:length()
   if dvLen > 3 then
-    -- a hard hit: piledriver if a carried ped is on the side that hit (impact direction = against the velocity change)
+    -- a hard hit: piledriver if a ped this car just killed is pinned on the side that hit (impact direction =
+    -- against the velocity change). In C1 the ped rides on the car; here it may have just dropped off it, so
+    -- any of its kills from the last 1.5 s right against the car count.
     local ix, iz = -(dv.x * c.sideX + dv.z * c.sideZ), -(dv.x * c.lookX + dv.z * c.lookZ)
     local il = math.sqrt(ix * ix + iz * iz)
-    if il > 0 and #carried > 0 then
-      local credits, b = scoring.onImpact(c.state, carried, ix / il, iz / il, c.impact.speed)
-      scoreEvent(c, credits, b)
+    if il > 0 then
+      local pinned = {}
+      for _, ped in ipairs(peds) do
+        if ped.killer == c.index and ped.deathTime and simT - ped.deathTime <= 1500 and not ped.piledriven then
+          local dx, dy, dz = ped.x - c.x, ped.y - c.y, ped.z - c.z
+          local lx = dx * c.sideX + dy * c.sideY + dz * c.sideZ
+          local lz = dx * c.lookX + dy * c.lookY + dz * c.lookZ
+          if math.abs(lx) <= c.halfW + 1.5 and math.abs(lz) <= c.halfL + 1.5 then
+            pinned[#pinned + 1] = {ped = ped, lx = lx, lz = lz}
+          end
+        end
+      end
+      if #pinned > 0 then
+        local credits, b, ped = scoring.onImpact(c.state, pinned, ix / il, iz / il, c.impact.speed)
+        if ped then ped.piledriven = true end
+        scoreEvent(c, credits, b)
+      end
     end
   elseif c.speed > 5 and clockT - c.lastProjectile > 1500 and not staticGeometryAround(c) then
     -- a light hit at speed with no wall around: something movable (a cone): it flies on and can hit peds
@@ -922,11 +952,11 @@ function script.update(dt)
     tick(simT)
   end
 
-  local carried = carryPeds()
+  carryPeds()
   if not replaying then
     for _, c in ipairs(carList) do
       if c.decides then
-        updateImpacts(c, carried[c.index] or {})
+        updateImpacts(c)
         -- cunning stunt: over and back on its wheels
         local gy = groundAt(c.x, c.y, c.z)
         local credits, b = scoring.updateStunt(c.state, {upY = c.upY, teleported = c.teleported,
@@ -939,6 +969,7 @@ function script.update(dt)
   pedlogic.updateGibs(clockT, math.min(dt, 0.1) * 1000)
   if not replaying then writeReplay() end
   flushSends()
+  cleanSounds()
 
   -- blood trails fade after 30 s
   if #bloodTrails > 0 and nowMs - bloodTrails[1][7] > 30000 then
@@ -1191,7 +1222,7 @@ pedlogic.mirrorBearings = settings.mirrorBearings
 -- offline tests (tests/smoke_test.lua) look at the internals through this; nil in AC
 if __carmapedsTest then
   __carmapedsTest.state = function()
-    return {peds = peds, cars = cars, projectiles = projectiles, audioPool = audioPool, scores = scores, log = eventLog,
+    return {peds = peds, cars = cars, projectiles = projectiles, audioFiles = audioFiles, playing = playing, scores = scores, log = eventLog,
       simT = simT, clockT = clockT}
   end
 end

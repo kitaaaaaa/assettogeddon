@@ -91,12 +91,13 @@ function M.onKill(state, kill, car, now)
   return credits, banner
 end
 
--- Piledriver: a car hits something while carrying a ped on the side it hit. impactX/Z: unit direction of the
--- impact in car space (x = side, z = look); carried: peds on the car, each with carriedLocal = {x, y, z}.
-function M.onImpact(state, carried, impactX, impactZ, speed)
+-- Piledriver: a car hits something with a ped it killed pinned on the side it hit. impactX/Z: unit direction
+-- of the impact in car space (x = side, z = look); speed: the car's speed before the hit (m/s); pinned: {ped,
+-- lx, lz} with the ped's place relative to the car's middle. Returns credits, banner, the ped.
+function M.onImpact(state, pinned, impactX, impactZ, speed)
   if speed <= 0.001 * 6900 then return 0, nil end  -- C1: car speed > 0.001 world units per ms
-  for _, ped in ipairs(carried) do
-    local lx, lz = ped.carriedLocal[1], ped.carriedLocal[3]
+  for _, p in ipairs(pinned) do
+    local ped, lx, lz = p.ped, p.lx, p.lz
     local len = math.sqrt(lx * lx + lz * lz)
     if len > 0 then
       lx, lz = lx / len, lz / len
@@ -105,7 +106,7 @@ function M.onImpact(state, carried, impactX, impactZ, speed)
       if lx * impactX + lz * impactZ > 0.8 then
         local credits = math.floor((math.floor(ped.def.credits / 2) + 12) / 25) * 25
         state.credits = state.credits + credits
-        return credits, M.BANNER.piledriver
+        return credits, M.BANNER.piledriver, ped
       end
     end
   end

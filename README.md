@@ -42,7 +42,8 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   x2 when the ped explodes, and the bonuses with C1's banners:
   - *Bonus for artistic impression* (x4): the car tumbling, on its side or roof (upside down included), or
     drifting;
-  - *Piledriver*: hitting a wall with a ped still on the front of the car;
+  - *Piledriver*: running a ped down and hitting a wall (or anything but another car) within 1.5 s, with the
+    ped pinned between the car and it, at over 25 km/h (C1's minimum);
   - *Nice shot, sir!* (x4): see below;
   - *Extra style* (x2): hitting a ped with the back of the car while reversing;
   - *Combo* and *Splatter* banners;
