@@ -65,36 +65,72 @@ function M.load(root, io, yield)
   out.soundDir = data .. '/SOUND/'
 
   local count = 0
+  local function add(name, m)
+    local rgba = pix.toRGBA(m, out.palette)
+    if not rgba then return false end
+    out.images[name] = {w = m.w, h = m.h, rgba = rgba}
+    count = count + 1
+    if count % 20 == 0 then yield() end
+    return out.images[name]
+  end
+  local function readPixFile(file)
+    for _, dir in ipairs(PIXELMAP_DIRS) do
+      local f = io.read(data .. '/' .. dir .. file)
+      if f then return pix.parse(f) end
+    end
+    return nil
+  end
+  -- Registers every pixelmap in a file under its own name (LoadNPixelmaps + BrMapAdd).
+  local loadedFiles = {}
+  local function loadPixFile(file)
+    file = file:upper()
+    if loadedFiles[file] ~= nil then return loadedFiles[file] end
+    local maps = readPixFile(file)
+    loadedFiles[file] = maps ~= nil
+    for _, m in ipairs(maps or {}) do
+      local n = m.name:upper()
+      if n ~= '' and out.images[n] == nil then
+        local img = add(n, m)
+        -- frames are referred to as NAME.PIX; accept stored names with or without the extension
+        local alias = n:match('^(.*)%.PIX$') or (n:find('.', 1, true) and nil or n .. '.PIX')
+        if alias and out.images[alias] == nil then out.images[alias] = img end
+      end
+    end
+    return loadedFiles[file]
+  end
+  -- An image by name: one already registered (BrMapFind), else a file of that name (LoadPixelmap).
   local function image(name)
     name = name:upper()
     if out.images[name] ~= nil then return out.images[name] end
-    for _, dir in ipairs(PIXELMAP_DIRS) do
-      local f = io.read(data .. '/' .. dir .. name)
-      if f then
-        local m = pix.parse(f)[1]
-        local rgba = m and pix.toRGBA(m, out.palette)
-        if rgba then
-          out.images[name] = {w = m.w, h = m.h, rgba = rgba}
-          count = count + 1
-          if count % 20 == 0 then yield() end
-          return out.images[name]
-        end
-      end
-    end
-    out.images[name] = false
-    return false
+    local maps = readPixFile(name)
+    local m = maps and maps[1]
+    out.images[name] = m and add(name, m) or false
+    return out.images[name]
   end
 
   out.peds = {}
+  -- every ped's frame file first: a ped can use frames from another's file (the game finds those by name)
   for _, p in ipairs(peds) do
-    local missing
+    if p.pixelmapFile and p.pixelmapFile ~= '' and not loadPixFile(p.pixelmapFile) then
+      warn(('pedestrian %d: pixelmap file %s not found'):format(p.ref, p.pixelmapFile))
+    end
+  end
+  for _, p in ipairs(peds) do
+    -- a missing frame is just not drawn; only a ped with no images at all (or no animation) is left out
+    local missing, found = {}, 0
     for _, s in ipairs(p.sequences) do
       for _, f in ipairs(s.frames) do
-        if not image(f.name) then missing = f.name end
+        if image(f.name) then found = found + 1 elseif not missing[f.name] then
+          missing[f.name] = true
+          missing[#missing + 1] = f.name
+        end
       end
     end
-    if #p.sequences == 0 or #p.actions == 0 then missing = missing or '(no animation)' end
-    if missing then warn(('pedestrian %d left out: missing %s'):format(p.ref, missing))
+    if #missing > 0 then
+      warn(('pedestrian %d: %d image(s) not found: %s'):format(p.ref, #missing, table.concat(missing, ' ', 1, math.min(#missing, 6))))
+    end
+    if #p.sequences == 0 or #p.actions == 0 then warn(('pedestrian %d left out: no animation'):format(p.ref))
+    elseif found == 0 then warn(('pedestrian %d left out: none of its images found'):format(p.ref))
     else out.peds[#out.peds + 1] = p end
   end
 

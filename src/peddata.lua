@@ -38,7 +38,7 @@ local function parseRecord(r, ref)
   p.acceleration = float()
   p.imageIndex = int()
   line()  -- shade table
-  line()  -- pixelmap(s) for the material
+  p.pixelmapFile = (T(line())[1] or ''):upper()  -- file holding the frames (LoadNPixelmaps)
   line()  -- material
   p.fatalCarImpactAction = int()
   p.nonFatalCarImpactAction = int()

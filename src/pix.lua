@@ -11,7 +11,8 @@ local function be16(s, i)
   return a * 256 + b
 end
 
--- Returns every pixelmap in the file: {type, row, w, h, pixels = string}.
+-- Returns every pixelmap in the file: {type, row, w, h, name, pixels = string}. A file can hold many
+-- (C1 keeps all of a pedestrian's frames in one), found by name like BRender's BrMapFind.
 function M.parse(data)
   local maps = {}
   local header
@@ -22,6 +23,11 @@ function M.parse(data)
     if body + len - 1 > #data then break end
     if (id == 0x03 or id == 0x3D) and len >= 11 then
       header = {type = data:byte(body), row = be16(data, body + 1), w = be16(data, body + 3), h = be16(data, body + 5)}
+      -- identifier: NUL-terminated after type, row, width, height, origin x/y (11 bytes; skip any extra fields)
+      local p = body + 11
+      while p < body + len and not data:sub(p, p):match('[%w_]') do p = p + 1 end
+      local zero = data:find('\0', p, true)
+      header.name = (zero and zero < body + len) and data:sub(p, zero - 1) or ''
     elseif id == 0x21 and header and len >= 8 then
       local count, size = be32(data, body), be32(data, body + 4)
       if count * size <= len - 8 then

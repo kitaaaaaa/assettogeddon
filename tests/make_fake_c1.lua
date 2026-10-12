@@ -11,12 +11,13 @@ local function write(p, s) local f = assert(io.open(p, 'wb')) f:write(s) f:close
 local function be32(v) return string.char(math.floor(v / 16777216) % 256, math.floor(v / 65536) % 256, math.floor(v / 256) % 256, v % 256) end
 local function be16(v) return string.char(math.floor(v / 256) % 256, v % 256) end
 local function chunk(id, body) return be32(id) .. be32(#body) .. body end
-local function pixFile(w, h, fill)
+local function pixMap(w, h, fill, name)
   local px = {}
   for y = 0, h - 1 do for x = 0, w - 1 do px[#px + 1] = string.char((x == 0 or y == 0) and 0 or fill) end end
-  return chunk(0x12, be32(2) .. be32(2)) .. chunk(0x03, string.char(3) .. be16(w) .. be16(w) .. be16(h) .. be16(0) .. be16(0) .. 'X\0')
+  return chunk(0x03, string.char(3) .. be16(w) .. be16(w) .. be16(h) .. be16(0) .. be16(0) .. (name or 'X') .. '\0')
     .. chunk(0x21, be32(w * h) .. be32(1) .. table.concat(px)) .. chunk(0, '')
 end
+local function pixFile(w, h, fill, name) return chunk(0x12, be32(2) .. be32(2)) .. pixMap(w, h, fill, name) end
 
 local D = root .. '/DATA'
 for _, d in ipairs({D, D .. '/REG/PALETTES', D .. '/SOUND', D .. '/64X48X8/PIXELMAP'}) do mkdir(d) end
@@ -66,7 +67,14 @@ for i = 2, #lines, 2 do lines[i] = '@' .. c1text.decode(lines[i], 2) end
 write(D .. '/PEDESTRN.TXT', table.concat(lines, '\r\n') .. '\r\n')
 
 local P = D .. '/64X48X8/PIXELMAP/'
-for _, n in ipairs({'STAND1', 'WALK1', 'WALK2', 'WALK3', 'WALK4', 'WALK5', 'DIE1', 'DIE2', 'DIE3', 'DIE4'}) do write(P .. n .. '.PIX', pixFile(24, 48, 5)) end
+-- as in the real data, all of a ped's frames are named pixelmaps in one file (PED.PIX); names stored
+-- without the extension for some, with it for others, and one frame only as a file of its own
+local maps = {}
+for i, n in ipairs({'STAND1', 'WALK1', 'WALK2', 'WALK3', 'WALK4', 'WALK5', 'DIE1', 'DIE2', 'DIE3'}) do
+  maps[#maps + 1] = pixMap(24, 48, 5, i % 2 == 0 and n or n .. '.PIX')
+end
+write(P .. 'PED.PIX', chunk(0x12, be32(2) .. be32(2)) .. table.concat(maps))
+write(P .. 'DIE4.PIX', pixFile(24, 48, 5, 'DIE4.PIX'))
 for size = 0, 3 do for _, n in ipairs(c1data.GIB_NAMES[size]) do write(P .. n, pixFile(16, 16, 9)) end end
 for _, n in ipairs(c1data.BANNER_NAMES) do write(P .. n, pixFile(128, 24, 12)) end
 print('fake C1 data written to ' .. root)

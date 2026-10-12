@@ -79,19 +79,28 @@ local function startLoading()
       return
     end
     local n = 0
+    local made = {}  -- one texture per image; several names can point at the same image
     for name, img in pairs(d.images) do
       if img then
-        textures[name] = ui.decodeImage(png.encode(img.w, img.h, img.rgba))
+        if not made[img] then
+          made[img] = ui.decodeImage(png.encode(img.w, img.h, img.rgba))
+          n = n + 1
+          if n % 20 == 0 then coroutine.yield() end
+        end
+        textures[name] = made[img]
         pedlogic.images[name] = {w = img.w, h = img.h}
-        img.rgba = nil
-        n = n + 1
-        if n % 20 == 0 then coroutine.yield() end
       end
     end
+    for img in pairs(made) do img.rgba = nil end
     pedlogic.gibImages = d.gibs
     for _, w in ipairs(d.warnings) do log(w) end
     log(('loaded %d pedestrian types, %d images, %d sounds'):format(#d.peds, n, countKeys(d.sounds)))
-    if #d.peds == 0 then loadError = 'No usable pedestrians found in PEDESTRN.TXT.' return end
+    if #d.peds == 0 then
+      local w = {}
+      for i = 1, math.min(#d.warnings, 5) do w[i] = d.warnings[i] end
+      loadError = 'No usable pedestrians found in PEDESTRN.TXT.' .. (#w > 0 and ('\n' .. table.concat(w, '\n')) or '')
+      return
+    end
     data = d
   end)
 end
@@ -663,7 +672,8 @@ function script.windowSettings(dt)
   pedlogic.mirrorBearings = settings.mirrorBearings
   if data and #data.warnings > 0 then
     ui.separator()
-    ui.textColored(('%d warnings while loading (see the CSP Lua log)'):format(#data.warnings), rgbm(1, 0.8, 0.3, 1))
+    ui.textColored(('%d warnings while loading (all of them are in the CSP Lua log):'):format(#data.warnings), rgbm(1, 0.8, 0.3, 1))
+    for i = 1, math.min(#data.warnings, 5) do ui.textWrapped(data.warnings[i]) end
   end
 end
 
