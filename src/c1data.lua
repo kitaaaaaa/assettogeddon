@@ -49,8 +49,9 @@ function M.load(root, io, yield)
   out.palette = pix.palette(pal)
   if not out.palette then
     local maps = pix.parse(pal)
-    return nil, ('%s: unexpected contents (%d bytes, %d pixelmaps, first bytes %s)'):format(palPath, #pal, #maps,
-      (pal:sub(1, 16):gsub('.', function(c) return ('%02X '):format(c:byte()) end)))
+    local preview = #pal <= 200 and not pal:find('[%z\1-\8\14-\31]') and ('"' .. pal .. '"')
+      or (pal:sub(1, 16):gsub('.', function(c) return ('%02X '):format(c:byte()) end))
+    return nil, ('%s: unexpected contents (%d bytes, %d pixelmaps): %s'):format(palPath, #pal, #maps, preview)
   end
 
   local pedText = io.read(data .. '/PEDESTRN.TXT')

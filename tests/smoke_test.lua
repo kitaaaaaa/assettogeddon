@@ -89,6 +89,7 @@ local realOpen = io.open
 io.fileExists = function(p) local f = realOpen(p, 'rb') if f then f:close() return true end return false end
 io.load = function(p)
   if os.getenv('MOCK_IOLOAD_NIL') then return nil end  -- io.load refusing (e.g. outside allowed folders)
+  if os.getenv('MOCK_IOLOAD_PATH') then return p end   -- io.load returning the path (seen on a real install)
   local f = realOpen(p, 'rb') if not f then return nil end local s = f:read('*a') f:close() return s
 end
 if os.getenv('MOCK_IOOPEN_DENIED') then io.open = function() return nil, 'Not allowed' end end

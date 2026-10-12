@@ -48,22 +48,23 @@ local function startLoading()
     local io_ = {
       exists = function(path) return io.fileExists(path) end,
     }
-    -- io.load first, then plain io.open as a fallback; failures are described for the error message
+    -- Standard binary io.open first; CSP's io.load only as a fallback (on a real install it returned a
+    -- 95-byte path-like string for DRRENDER.PAL instead of the file). Failures are described for the error.
     function io_.read(path)
       if not io.fileExists(path) then io_.lastError = 'file not found' return nil end
-      local ok, res = pcall(io.load, path)
-      if ok and type(res) == 'string' and #res > 0 then return res end
-      local why = ok and (res == nil and 'io.load returned nothing' or ('io.load returned %s bytes'):format(type(res) == 'string' and #res or type(res)))
-        or ('io.load failed: ' .. tostring(res))
+      local why
       local f, ferr = io.open(path, 'rb')
       if f then
         local s = f:read('*a')
         f:close()
-        if s and #s > 0 then return s end
-        why = why .. '; io.open read nothing'
+        if type(s) == 'string' and #s > 0 then return s end
+        why = 'io.open read nothing'
       else
-        why = why .. '; io.open: ' .. tostring(ferr)
+        why = 'io.open: ' .. tostring(ferr)
       end
+      local ok, res = pcall(io.load, path)
+      if ok and type(res) == 'string' and #res > 0 then return res end
+      why = why .. '; ' .. (ok and 'io.load returned nothing' or ('io.load failed: ' .. tostring(res)))
       io_.lastError = why
       return nil
     end
