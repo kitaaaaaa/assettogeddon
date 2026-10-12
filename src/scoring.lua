@@ -13,7 +13,33 @@ M.BANNER = {
   combo4 = {index = 6, image = '4XCOMBO.PIX', text = '4X COMBO BONUS'},
   combo5 = {index = 7, image = '5XCOMBO.PIX', text = '5X COMBO BONUS'},
   niceShot = {index = 8, image = 'BILLIARD.PIX', text = 'NICE SHOT, SIR!'},
+  cunningStunt = {index = 9, image = 'POLITE.PIX', text = 'CUNNING STUNT BONUS'},
 }
+
+-- Cunning stunt (dethrace car.c): the car went over (upside down at some point) and is back on its wheels for
+-- half a second; at most one every 10 s. car: {upY (up . world up), onGround, teleported}.
+M.STUNT_CREDITS = 1000  -- replaced by GENERAL.TXT's value (middle skill level)
+function M.updateStunt(state, car, now)
+  if car.teleported then  -- reset to the track (or similar): not a stunt
+    state.wentOver, state.onWheelsSince = false, nil
+    return 0, nil
+  end
+  if car.upY < 0 then state.wentOver = true end
+  if state.wentOver and car.upY > 0.85 and car.onGround then
+    state.onWheelsSince = state.onWheelsSince or now
+    if now - state.onWheelsSince > 500 then
+      state.wentOver, state.onWheelsSince = false, nil
+      if now - (state.lastStunt or -1e9) > 10000 then
+        state.lastStunt = now
+        state.credits = state.credits + M.STUNT_CREDITS
+        return M.STUNT_CREDITS, M.BANNER.cunningStunt
+      end
+    end
+  else
+    state.onWheelsSince = nil
+  end
+  return 0, nil
+end
 
 -- Thresholds for the car's state at the moment of the kill. C1 checks its own physics' angular velocity
 -- (|omega.x| or |omega.z| > 5) and attitude (up . world up < 0.1); AC's are measured from the car's motion.

@@ -157,13 +157,38 @@ local function randomSpot(r)
   return nil
 end
 
+local randomTypes = {}  -- every ped type but the flagman
+local flagmanType
+local flagmanWaved = false
+
 local function spawnPed(slot)
-  local def = data.peds[1 + math.floor(spawnRandom() * #data.peds)]
+  local def = randomTypes[1 + math.floor(spawnRandom() * #randomTypes)]
   local x, y, z = randomSpot(spawnRandom)
   if not x then return nil end
   local ped = pedlogic.new(def, x, y, z, nowMs)
   ped.slot = slot
   return ped
+end
+
+-- The flagman (C1 ref 99): one, standing beside the track at the start/finish line.
+local function spawnFlagman()
+  if not flagmanType or not splineAvailable() then return nil end
+  local c = ac.trackProgressToWorldCoordinate(0)
+  local n = ac.trackProgressToWorldCoordinate(2 / math.max(sim.trackLengthM, 100))
+  local side = (n - c):normalize():cross(vecUp):normalize()
+  local s = ac.getTrackAISplineSides(0)
+  for _, lateral in ipairs({s.x + 1.5, -(s.y + 1.5), s.x - 0.5, -(s.y - 0.5)}) do
+    local x, z = c.x + side.x * lateral, c.z + side.z * lateral
+    local gy = pedlogic.groundBelow(ray, x, c.y + 30, z, 100)
+    if gy then
+      local ped = pedlogic.new(flagmanType, x, gy, z, nowMs)
+      ped.flagman = true  -- C1's flagman only stands (his calm action) or runs when a car comes at him
+      ped.homeX, ped.homeZ = x, z
+      ped.dirX, ped.dirZ = -side.x * (lateral > 0 and 1 or -1), -side.z * (lateral > 0 and 1 or -1)  -- facing the track
+      return ped
+    end
+  end
+  return nil
 end
 
 local function populate()
@@ -174,46 +199,112 @@ local function populate()
   peds = {}
   pedlogic.gibs = {}
   bloodTrails = {}
+  randomTypes, flagmanType, flagmanWaved = {}, nil, false
+  for _, def in ipairs(data.peds) do
+    if def.ref == c1data.FLAGMAN_REF then flagmanType = def else randomTypes[#randomTypes + 1] = def end
+  end
+  if #randomTypes == 0 then randomTypes = data.peds end
+  local flagman = spawnFlagman()
+  if flagman then peds[#peds + 1] = flagman end
   for i = 1, settings.pedCount do
     local p = spawnPed(i)
     if p then peds[#peds + 1] = p end
   end
-  log(('placed %d pedestrians (seed %d)'):format(#peds, seed))
+  log(('placed %d pedestrians (seed %d)%s'):format(#peds, seed, flagman and ', flagman at the start line' or ''))
 end
 
 -- ---------------------------------------------------------------------------------------------
--- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped.
-local audioPool = {}  -- file -> {events, next}
+-- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. Each file gets a few voices; a voice is only
+-- reused once its sound has finished (length from the WAV header), so a new sound never cuts or skips an
+-- old one. Splats and death sounds always play; other ped noises are limited to 20 a second.
+local audioPool = {}  -- file -> {voices = {{ev, busyUntil}}, length} or false
 local soundsThisSecond, soundSecond = 0, 0
-local function playSoundAt(id, x, y, z)
+local MAX_VOICES_PER_FILE = 6
+
+-- Length of a PCM WAV in ms (RIFF 'fmt ' byte rate, 'data' size); 3 s if it can't be read.
+local function wavLength(path)
+  local f = io.open(path, 'rb')
+  local d = f and f:read('*a')
+  if f then f:close() end
+  if not d or d:sub(1, 4) ~= 'RIFF' then return 3000 end
+  local function le32(i) local a, b, c, e = d:byte(i, i + 3) return a + b * 256 + c * 65536 + e * 16777216 end
+  local p, byteRate, size = 13, nil, nil
+  while p + 7 <= #d do
+    local id, len = d:sub(p, p + 3), le32(p + 4)
+    if id == 'fmt ' then byteRate = le32(p + 16) elseif id == 'data' then size = len end
+    p = p + 8 + len + len % 2
+  end
+  if byteRate and size and byteRate > 0 then return size / byteRate * 1000 end
+  return 3000
+end
+
+local function audioFor(file)
+  local pool = audioPool[file]
+  if pool == nil then
+    if not io.fileExists(file) then audioPool[file] = false return false end
+    pool = {voices = {}, length = wavLength(file)}
+    audioPool[file] = pool
+  end
+  return pool
+end
+
+local function newVoice(file)
+  return {ev = ac.AudioEvent.fromFile({filename = file, use3D = true, loop = false, minDistance = 5, maxDistance = 150}, false),
+    busyUntil = -1}
+end
+
+-- Creates one voice per pedestrian sound up front, so the first play of each isn't lost to loading.
+local function preloadSounds()
+  local ids = {[4020] = true}
+  for _, def in ipairs(data.peds) do
+    for _, id in ipairs(def.explodingSounds) do ids[id] = true end
+    if def.fallingSound >= 0 then ids[def.fallingSound] = true end
+    for _, a in ipairs(def.actions) do for _, id in ipairs(a.sounds) do ids[id] = true end end
+  end
+  for id in pairs(ids) do
+    local s = data.sounds[id]
+    local pool = s and audioFor(data.soundDir .. s.file)
+    if pool and #pool.voices == 0 then pool.voices[1] = newVoice(data.soundDir .. s.file) end
+  end
+end
+
+local function playSoundAt(id, x, y, z, important)
   if not data or settings.volume <= 0 then return end
   local s = data.sounds[id]
   if not s then return end
-  local sec = math.floor(nowMs / 1000)
-  if sec ~= soundSecond then soundSecond, soundsThisSecond = sec, 0 end
-  if soundsThisSecond >= 10 then return end
   if (sim.cameraPosition.x - x) ^ 2 + (sim.cameraPosition.z - z) ^ 2 > 150 * 150 then return end
-  soundsThisSecond = soundsThisSecond + 1
+  if not important then
+    local sec = math.floor(nowMs / 1000)
+    if sec ~= soundSecond then soundSecond, soundsThisSecond = sec, 0 end
+    if soundsThisSecond >= 20 then return end
+    soundsThisSecond = soundsThisSecond + 1
+  end
   local file = data.soundDir .. s.file
-  local pool = audioPool[file]
-  if not pool then
-    if not io.fileExists(file) then audioPool[file] = false return end
-    pool = {events = {}, next = 1}
-    audioPool[file] = pool
-  elseif pool == false then
-    return
+  local pool = audioFor(file)
+  if not pool then return end
+  local voice
+  for _, v in ipairs(pool.voices) do
+    if v.busyUntil <= nowMs then voice = v break end
   end
-  local ev = pool.events[pool.next]
-  if not ev then
-    ev = ac.AudioEvent.fromFile({filename = file, use3D = true, loop = false, minDistance = 5, maxDistance = 150}, false)
-    pool.events[pool.next] = ev
+  if not voice then
+    if #pool.voices < MAX_VOICES_PER_FILE then
+      voice = newVoice(file)
+      pool.voices[#pool.voices + 1] = voice
+    elseif important then  -- all busy: take the one that finishes first
+      voice = pool.voices[1]
+      for _, v in ipairs(pool.voices) do if v.busyUntil < voice.busyUntil then voice = v end end
+    else
+      return
+    end
   end
-  pool.next = pool.next % 3 + 1
+  voice.busyUntil = nowMs + pool.length + 50
+  local ev = voice.ev
   ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
   ev:start()
 end
-pedlogic.playSound = function(ped, id) playSoundAt(id, ped.x, ped.y, ped.z) end
+-- splats and the sounds of dying peds always play
+pedlogic.playSound = function(ped, id) playSoundAt(id, ped.x, ped.y, ped.z, id == 4020 or pedlogic.isDead(ped)) end
 
 -- ---------------------------------------------------------------------------------------------
 -- Cars
@@ -223,10 +314,13 @@ local function carInfo(i, dt)
   local c = cars[i]
   if not c then
     c = {index = i, state = scoring.newCarState(), wheels = {}, prevUp = car.up:clone(), prevVel = car.velocity:clone(),
-      wasColliding = false, lastProjectile = -1e9}
+      wasColliding = false, lastProjectile = -1e9, prevPos = car.position:clone()}
     for w = 1, 4 do c.wheels[w] = {blood = 0} end
     cars[i] = c
   end
+  -- a jump much bigger than the speed allows: the car was put back on the track (or similar)
+  c.teleported = car.position:distanceSquared(c.prevPos) > (car.speedMs * dt + 5) ^ 2
+  c.prevPos:set(car.position)
   local centre = car.bodyTransform:transformPoint(car.aabbCenter)
   c.x, c.y, c.z = centre.x, centre.y, centre.z
   c.sideX, c.sideY, c.sideZ = car.side.x, car.side.y, car.side.z
@@ -272,6 +366,23 @@ local function carInfo(i, dt)
   return c
 end
 
+-- Is the car touching (or right next to) the track's own geometry: a wall, barrier, kerb or the ground at
+-- its side? Rays out from the car's middle in 8 directions in its own plane. Movable objects (cones) aren't
+-- part of the track's collision surfaces, so a hit with nothing like this around was with something movable.
+local function staticGeometryAround(c)
+  for k = 0, 7 do
+    local a = k * math.pi / 4
+    local sx, lz = math.sin(a), math.cos(a)
+    local dx = c.sideX * sx + c.lookX * lz
+    local dy = c.sideY * sx + c.lookY * lz
+    local dz = c.sideZ * sx + c.lookZ * lz
+    -- distance from the middle to the box edge in this direction, plus a margin
+    local reach = math.min(math.abs(sx) > 1e-6 and c.halfW / math.abs(sx) or 1e9, math.abs(lz) > 1e-6 and c.halfL / math.abs(lz) or 1e9) + 0.6
+    if ray(c.x, c.y, c.z, dx, dy, dz, reach) ~= -1 then return true end
+  end
+  return false
+end
+
 local function award(c, credits, bannerDef)
   if credits > 0 and c.index == sim.focusedCar then
     popups[#popups + 1] = {text = ('+%d'):format(credits), time = nowMs}
@@ -303,8 +414,9 @@ local function updateImpacts(c, carried)
       local credits, b = scoring.onImpact(c.state, carried, ix / il, iz / il, c.impact.speed)
       if credits > 0 then award(c, credits, b) end
     end
-  elseif c.speed > 5 and nowMs - c.lastProjectile > 1500 then
-    -- a light hit at speed (a cone, a sign): the object flies on and can hit peds ('Nice shot, sir!')
+  elseif c.speed > 5 and nowMs - c.lastProjectile > 1500 and not staticGeometryAround(c) then
+    -- a light hit at speed with no wall around: something movable (a cone): it flies on and can hit peds
+    -- ('Nice shot, sir!'). Walls and other track geometry never count.
     c.lastProjectile = nowMs
     local fx = c.vx / math.max(c.speed, 0.1)
     local fz = c.vz / math.max(c.speed, 0.1)
@@ -368,7 +480,11 @@ function script.update(dt)
       log(err)
     elseif coroutine.status(loader) == 'dead' then
       loader = nil
-      if data then populate() end
+      if data then
+        if data.cunningStunt then scoring.STUNT_CREDITS = data.cunningStunt[2] end
+        preloadSounds()
+        populate()
+      end
     end
     return
   end
@@ -435,6 +551,23 @@ function script.update(dt)
   for _, c in ipairs(carList) do
     updateImpacts(c, carriedBy[c.index] or {})
     updateBlood(c)
+    -- cunning stunt: over and back on its wheels
+    local gy = groundAt(c.x, c.y, c.z)
+    local credits, b = scoring.updateStunt(c.state, {upY = c.upY, teleported = c.teleported,
+      onGround = gy ~= nil and c.y - c.halfH - gy < 0.6}, nowMs)
+    if credits > 0 then award(c, credits, b) end
+  end
+  -- the flagman waves his flag when the cars set off (C1: when the countdown reaches zero)
+  if not flagmanWaved then
+    for _, c in ipairs(carList) do
+      if c.speed > 2 then
+        flagmanWaved = true
+        for _, ped in ipairs(peds) do
+          if ped.flagman and not pedlogic.isDead(ped) and #ped.def.actions >= 8 then pedlogic.changeActionTo(ped, 7, true, nowMs) end
+        end
+        break
+      end
+    end
   end
   updateProjectiles(dtMs)
   pedlogic.updateGibs(nowMs, dtMs)
@@ -443,7 +576,7 @@ function script.update(dt)
   if settings.respawnSeconds > 0 then
     for i, ped in ipairs(peds) do
       if ped.deathTime and nowMs - ped.deathTime > settings.respawnSeconds * 1000 then
-        local p = spawnPed(ped.slot)
+        local p = ped.flagman and spawnFlagman() or spawnPed(ped.slot)
         if p then peds[i] = p end
       end
     end
@@ -679,4 +812,8 @@ end
 
 -- ---------------------------------------------------------------------------------------------
 pedlogic.mirrorBearings = settings.mirrorBearings
+-- offline tests (tests/smoke_test.lua) look at the internals through this; nil in AC
+if __carmapedsTest then
+  __carmapedsTest.state = function() return {peds = peds, cars = cars, projectiles = projectiles, audioPool = audioPool} end
+end
 startLoading()

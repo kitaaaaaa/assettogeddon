@@ -128,7 +128,9 @@ function M.mungeAction(ped, danger, now)
   local most, first, last = -1, 0, 0
   for i = 1, #d.actions do
     local a = d.actions[i]
-    if a.dangerLevel < 999 and a.dangerLevel <= danger and a.reactionTime <= timeDiff then
+    -- C1: the flagman waving his flag (action 7) isn't interrupted by calm actions, only by danger
+    if a.dangerLevel < 999 and a.dangerLevel <= danger and a.reactionTime <= timeDiff
+      and not (ped.flagman and ped.action == 7 and a.dangerLevel == 0) then
       if a.dangerLevel > most then most, first, last = a.dangerLevel, i, i
       elseif a.dangerLevel == most then last = i end
     end

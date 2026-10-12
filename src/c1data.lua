@@ -15,7 +15,22 @@ M.GIB_NAMES = {
   {'CHUNK04.PIX', 'SPLAT1.PIX', 'CHUNK03.PIX', 'SPLAT2.PIX', 'SPLATOUT.PIX'},
 }
 M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX', '2XCOMBO.PIX', '3XCOMBO.PIX',
-  '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX'}
+  '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX'}
+M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVING_BASTARD_REF)
+
+-- GENERAL.TXT's "Cunning stunt bonus for each skill level" line (three values), found by its comment.
+function M.cunningStuntCredits(text, method)
+  if not text then return nil end
+  local r = c1text.reader(text, method)
+  for l in function() return r:line() end do
+    if l:lower():find('cunning stunt', 1, true) then
+      local t = c1text.tokens(l)
+      local a, b, c = tonumber(t[1]), tonumber(t[2]), tonumber(t[3])
+      if a and b and c then return {a, b, c} end
+    end
+  end
+  return nil
+end
 
 -- Pixelmaps: the game looks in DATA/<resolution>/PIXELMAP, then DATA/PIXELMAP (loading.c LoadPixelmap).
 local PIXELMAP_DIRS = {'64X48X8/PIXELMAP/', '32X20X8/PIXELMAP/', 'PIXELMAP/'}
@@ -40,7 +55,9 @@ function M.load(root, io, yield)
   local out = {dataDir = data, warnings = {}, images = {}}
   local function warn(s) out.warnings[#out.warnings + 1] = s end
 
-  out.method = c1text.detectMethod(io.read(data .. '/GENERAL.TXT'))
+  local general = io.read(data .. '/GENERAL.TXT')
+  out.method = c1text.detectMethod(general)
+  out.cunningStunt = M.cunningStuntCredits(general, out.method)
   local palPath = data .. '/REG/PALETTES/DRRENDER.PAL'
   local pal = io.read(palPath)
   if not pal then

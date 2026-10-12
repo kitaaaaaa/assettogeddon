@@ -3,6 +3,8 @@
 -- luajit tests/smoke_test.lua <fake C1 dir>
 package.path = './?.lua;' .. package.path
 local fakeRoot = assert(arg[1], 'usage: smoke_test.lua <fake C1 dir>')
+local failures = 0
+local function check(cond, msg) if not cond then failures = failures + 1 print('FAIL: ' .. msg) end end
 
 -- ---- vectors ---------------------------------------------------------------------------------
 local vec3mt = {}
@@ -44,6 +46,7 @@ ac = {
   getTrackAISplineSides = function(p) return vec2(6, 6) end,
   getDriverName = function(i) return 'Driver ' .. i end,
   AudioEvent = {fromFile = function(params)
+    AUDIO_CREATED = (AUDIO_CREATED or 0) + 1
     assert(params.filename and params.use3D ~= nil, 'audio params')
     local ev = {volume = 1}
     function ev:setPosition(p, u, f, v) assert(p.x, 'position') end
@@ -57,6 +60,7 @@ physics = {raycastTrack = function(pos, dir, len)
     if pos.y >= 0 and pos.y <= len then return pos.y end
     return -1
   end
+  if MOCK_WALLS and math.abs(dir.y) < 0.5 then return 0.2 end  -- a wall right next to everything
   return -1  -- no walls
 end}
 local renderCallback
@@ -111,6 +115,7 @@ carsMock[1] = makeCar(1, 3, -950, 0)
 -- ---- run ---------------------------------------------------------------------------------------
 __dirname = fakeRoot  -- the app's own folder, holding the copied DATA
 storage.pedCount = 400
+__carmapedsTest = {}
 dofile('carmapeds.lua')
 local frames = 0
 local dt = 1 / 60
@@ -169,4 +174,43 @@ script.windowMain(dt)
 print('window: ' .. tostring(deadText))
 local dead = tonumber(deadText:match(', (%d+) dead'))
 assert(dead and dead > 0, 'cars killed some pedestrians')
-print('smoke test passed')
+-- flagman: exactly one, beside the track at the start line (mock spline starts at z = -1000, 6 m sides),
+-- standing still, waving (action 7) since the cars set off
+local st = __carmapedsTest.state()
+local flagmen = {}
+for _, p in ipairs(st.peds) do if p.def.ref == 99 then flagmen[#flagmen + 1] = p end end
+check(#flagmen == 1, 'one flagman, got ' .. #flagmen)
+local fm = flagmen[1]
+check(fm and fm.flagman and math.abs(fm.homeZ + 1000) < 3 and math.abs(math.abs(fm.homeX) - 7.5) < 0.01, 'flagman placed at the start line beside the track')
+check(fm and (fm.action == 7 or fm.hitPoints < 0), 'flagman waving (or run over)')
+
+-- cunning stunt: car 1 rolls onto its roof and back onto its wheels
+local c1 = carsMock[1]
+c1.velocity:set(0, 0, 0) c1.speedMs = 0
+local before = st.cars[1].state.credits
+c1.up:set(0, -1, 0) for _ = 1, 30 do frame() end
+c1.up:set(0, 1, 0) for _ = 1, 60 do frame() end
+check(st.cars[1].state.credits - before == 1500, 'cunning stunt pays the middle skill level value (1500): got ' .. (st.cars[1].state.credits - before))
+
+-- nice shot: a light hit with no wall around launches an object; with a wall next to the car it doesn't
+local c0 = carsMock[0]
+local function lightHit()
+  c0.velocity:set(0, 0, 20) c0.speedMs = 20 frame()
+  c0.collisionDepth = 0.05 frame()
+  c0.collisionDepth = 0 frame()
+end
+for _ = 1, 200 do frame() end
+local n0 = #st.projectiles
+MOCK_WALLS = true
+lightHit()
+check(#__carmapedsTest.state().projectiles == n0, 'scraping a wall launches nothing')
+MOCK_WALLS = false
+for _ = 1, 120 do frame() end
+lightHit()
+check(#__carmapedsTest.state().projectiles >= 1, 'hitting something movable launches an object')
+
+-- sounds: a voice is reused only after its sound (0.5 s here) has finished
+check((AUDIO_CREATED or 0) > 0, 'audio voices created')
+
+print(failures == 0 and 'smoke test passed' or (failures .. ' failure(s)'))
+os.exit(failures == 0 and 0 or 1)

@@ -23,7 +23,7 @@ local D = root .. '/DATA'
 for _, d in ipairs({D, D .. '/REG/PALETTES', D .. '/SOUND', D .. '/64X48X8/PIXELMAP'}) do mkdir(d) end
 
 -- encrypted GENERAL.TXT first line, method 2 (doesn't decode to "0.01\t\t" with method 1)
-write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n')
+write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n2000,1500,500\t\t// Cunning stunt bonus for each skill level\r\n')
 
 local pal = {}
 for i = 0, 255 do pal[#pal + 1] = string.char(0, i, (i * 3) % 256, 255 - i) end
@@ -34,14 +34,18 @@ write(D .. '/REG/PALETTES/DRRENDER.PAL', chunk(0x12, be32(2) .. be32(2))
 local sound = {}
 for _, id in ipairs({4000, 4001, 4020, 4100, 4200}) do
   sound[#sound + 1] = ('%d\n0,1\nS%d.WAV\n5\n1\n255,255\n1,1\n1,1\n0\n0\n'):format(id, id)
-  write(D .. '/SOUND/S' .. id .. '.WAV', 'RIFF')
+  -- a real PCM WAV header: 22050 Hz mono 8-bit, 0.5 s of silence
+  local function le32(v) return string.char(v % 256, math.floor(v / 256) % 256, math.floor(v / 65536) % 256, math.floor(v / 16777216) % 256) end
+  local n = 11025
+  write(D .. '/SOUND/S' .. id .. '.WAV', 'RIFF' .. le32(36 + n) .. 'WAVE' .. 'fmt ' .. le32(16)
+    .. string.char(1, 0, 1, 0) .. le32(22050) .. le32(22050) .. string.char(1, 0, 8, 0) .. 'data' .. le32(n) .. string.rep('\128', n))
 end
 write(D .. '/SOUND/SOUND.TXT', '// sounds\n' .. table.concat(sound, '\n'))
 
--- one pedestrian: 0 stand, 1 walk, 2 run, 3 fatal car, 4 fatal ground, 5 giblets, 6/7 non-fatal impacts
+-- one pedestrian: 0 stand, 1 walk, 2 run, 3 fatal car, 4 fatal ground, 5 giblets, 6 non-fatal impacts, 7 wave
 local lines = {
   '1', '0.25', '50', '100', '2, 4000, 4001', '4100', '0.0002', '0', 'PED.TAB', 'PED.PIX', 'PED.MAT',
-  '3', '6', '0', '4', '7', '5', '8',
+  '3', '6', '0', '4', '6', '5', '8',  -- action 7 is free: C1 uses it for the flagman's wave
   '0, 50', '0, 0', '1', '0', '1', '360, 0',
   '0, 50', '0.0002, 0.0002', '1', '0', '1', '360, 1',
   '5, 100', '0.0008, 0.001', '0', '1, 4200', '2', '180, 1', '360, 1',
@@ -61,6 +65,11 @@ seq('fixed', nil, nil, 1, 0, 'STAND')
 seq('speed', 0.08, 10, 1, 4, 'WALK')
 seq('variable', 10, 10, 4, 0, 'DIE')
 lines[#lines + 1] = 'NEXT PEDESTRIAN'
+-- the flagman (ref 99): the same ped again under his own ref
+local n0 = #lines
+for i = 2, n0 - 1 do lines[#lines + 1] = lines[i] end
+lines[#lines + 1] = 'NEXT PEDESTRIAN'
+table.insert(lines, n0 + 1, '99')
 lines[#lines + 1] = 'END OF PEDESTRIANS'
 -- encrypt every other line, as the real files mix both
 for i = 2, #lines, 2 do lines[i] = '@' .. c1text.decode(lines[i], 2) end

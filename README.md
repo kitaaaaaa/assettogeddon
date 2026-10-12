@@ -21,7 +21,8 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 
 - **Pedestrians**: a few hundred (adjustable) on random spots across the track and just beside it, using every
   pedestrian type in `DATA\PEDESTRN.TXT`. Placement comes from the track's name, so a track always gets the
-  same layout.
+  same layout. The flagman is the exception: there's one, standing beside the track at the start/finish line,
+  and he waves his flag when the cars set off (C1 does it when the countdown ends).
 - **Behaviour** (ported from [dethrace](https://github.com/dethrace-labs/dethrace)'s `pedestrn.c`): the game's
   danger level from each approaching car, its action choice (stand, walk, run, ...) by danger and chance,
   direction-dependent animation sequences and frame timing, sounds, gravity and fall damage. C1 peds walk along
@@ -37,18 +38,23 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 - **Scoring**, per car (the app window shows the table; the HUD shows the car you're watching): the ped's
   credit value from the game data, the combo multiplier for kills within a second of each other (up to 5x),
   x2 when the ped explodes, and the bonuses with C1's banners:
-  - *Bonus for artistic impression* (x4): the car tumbling, on its side or roof, or drifting;
+  - *Bonus for artistic impression* (x4): the car tumbling, on its side or roof (upside down included), or
+    drifting;
   - *Piledriver*: hitting a wall with a ped still on the front of the car;
   - *Nice shot, sir!* (x4): see below;
   - *Extra style* (x2): hitting a ped with the back of the car while reversing;
-  - *Combo* and *Splatter* banners.
+  - *Combo* and *Splatter* banners;
+  - *Cunning stunt bonus*, with or without peds: the car goes over (upside down at some point) and lands back on
+    its wheels for half a second; once per 10 s, worth GENERAL.TXT's value for the middle skill level (1000 in
+    the original data). Being put back on the track doesn't count.
 
 ## Approximations
 
-- **Nice shot, sir!** In C1 this is a ped killed by an object a car knocked into it. AC tracks rarely have
-  movable objects and a Lua app can't see their collisions, so: when a car hits something lightly at speed
-  (not a car, not a hard wall hit), an invisible object flies on from the impact for up to 2 s, and peds it
-  passes count as Nice Shot kills.
+- **Nice shot, sir!** In C1 this is a ped killed by an object a car knocked into it. A Lua app can't see
+  collisions between track objects and peds, so: when a car hits something lightly at speed, and it isn't
+  another car and there's no wall or other track geometry right next to the car (movable objects such as
+  cones aren't part of the track's collision surfaces), an invisible object flies on from the impact for up
+  to 2 s, and peds it passes count as Nice Shot kills. Wall hits never count.
 - **Tumbling** uses the car's measured pitch/roll rate (over 2.5 rad/s) instead of C1's physics state.
 - Peds only run their logic within 400 m of the camera or 200 m of a car.
 
@@ -72,6 +78,7 @@ Pure-Lua parts (data parsing, behaviour, scoring) are tested offline with LuaJIT
 ```
 luajit tests/run.lua tests/out.png && python3 tests/check_png.py tests/out.png
 luajit tests/pedlogic_test.lua
+luajit tests/scoring_test.lua
 luajit tests/make_fake_c1.lua /tmp/fakec1 && luajit tests/smoke_test.lua /tmp/fakec1
 ```
 
