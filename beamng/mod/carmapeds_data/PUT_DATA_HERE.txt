@@ -1,0 +1,2 @@
+Copy the DATA folder from your Carmageddon 1 install into this folder, so you have
+carmapeds_data/DATA/PEDESTRN.TXT

@@ -1,3 +1,5 @@
 tests/out.png
 # Carmageddon data is copied in by each user, never committed
 DATA/
+beamng/build/
+beamng/carmapeds_beamng.zip

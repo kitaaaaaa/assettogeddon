@@ -7,6 +7,8 @@ Carmageddon's own bonuses.
 **No Carmageddon files are included.** The app reads them from a copy of Carmageddon 1's `DATA` folder that
 you put in the app's own folder, so it always uses the original files, whatever mods your game install has.
 
+There's also a BeamNG.drive version: see [beamng/README.md](beamng/README.md).
+
 ## Install
 
 1. Copy the `carmapeds` folder to `assettocorsa\apps\lua\` or drag the .zip file over Content Manager and install from the burger menu.
