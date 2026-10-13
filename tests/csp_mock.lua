@@ -105,6 +105,11 @@ return function(opts)
     getTrackAISplineSides = function(p) return vec2(6, 6) end,
     -- the track's grid: AC_START_0..9, two staggered columns (x = -2 / +2), 8 m apart, behind the start line
     findNodes = function(name)
+      -- opts.aabbs = {[root query] = {min, max}}: the extent of the static geometry under it
+      local box = opts.aabbs and opts.aabbs[name]
+      if box then
+        return {getStaticAABB = function() return vec3(box[1], -10, box[2]), vec3(box[3], 50, box[4]), 1 end}
+      end
       local i = tonumber(name:match('^AC_START_(%d+)$'))
       local m = i and i < 10 and {position = vec3(i % 2 == 0 and -2 or 2, 0, -1000 - 8 - 4 * i), look = vec3(0, 0, 1)}
       return {getWorldTransformationRaw = function() return m or nil end}

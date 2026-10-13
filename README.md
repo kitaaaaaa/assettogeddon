@@ -25,7 +25,7 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   every layer with at least 2 m of headroom; on-track ones on the racing line's own layer. Maps without an AI
   line (free roam maps, conversions) are explored once at load: from the car spawn points, in 10 m steps over
   connected ground (no walls in the way, at most a 3 m climb, 2 m of headroom), so peds go along the roads, car
-  parks and tunnels the cars can reach, never on roofs; counted per km explored (up to 40 km). Every
+  parks and tunnels the cars can reach, never on roofs; counted per km explored (up to 80 km). Maps split into several .kn5 files are explored across all of them. Every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
   with the rest.  Placement comes from the track's name, so a track always gets the
   same layout. 

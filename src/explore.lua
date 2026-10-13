@@ -2,7 +2,8 @@
 -- car spawn points, it grows a tree of points over connected ground in 10 m steps (a rapidly-exploring random
 -- tree: it extends the point nearest to a random target, so it spreads out evenly): each step needs ground
 -- within a 3 m climb or drop, no wall in the way, ground halfway too (no jumping gaps) and 2 m of headroom.
--- So it follows roads, car parks, tunnels and ramps, and never gets onto roofs or the far side of a wall.
+-- A blocked step turns up to 90 degrees either way, and half the steps carry on the way their point was reached,
+-- so growth follows roads, car parks, tunnels and ramps, and never gets onto roofs or the far side of a wall.
 -- Pure Lua: the raycast is passed in. ray(x, y, z, dx, dy, dz, len) -> distance or -1.
 local M = {}
 
@@ -11,7 +12,7 @@ M.MIN_GAP = 6     -- m: no point closer than this to another
 M.CLIMB = 3       -- m of height change allowed over a step
 M.HEADROOM = 2    -- m of free space above the ground
 M.WALL_HEIGHT = 1.2
-M.PER_YIELD = 100   -- attempts between yields (about 2 raycasts each): ~200 rays a frame while loading
+M.PER_YIELD = 200   -- attempts between yields (about 2 raycasts each): ~400 rays a frame while loading
 M.MAX_STREAK = 2000 -- stop after this many failed attempts in a row (the ground is covered)
 M.TRIES_PER_NODE = 8 -- and after this many attempts per point wanted
 
@@ -32,6 +33,12 @@ local function step(ray, n, dx, dz)
   local top = math.max(n.y, y) + M.CLIMB
   if not ground(ray, n.x + dx * len / 2, top, n.z + dz * len / 2, M.CLIMB * 2 + math.abs(y - n.y)) then return nil end
   return x, y, z
+end
+
+local TURNS = {0}
+for _, deg in ipairs({20, 40, 60, 90}) do
+  TURNS[#TURNS + 1] = math.rad(deg)
+  TURNS[#TURNS + 1] = -math.rad(deg)
 end
 
 -- rand: [0, 1) generator; seeds: {{x, y, z}} points on the ground (car spawn points); bounds: {min, max} (vec3s
@@ -70,8 +77,9 @@ function M.run(rand, ray, seeds, bounds, maxNodes, yield)
     attempts = attempts + 1
     if attempts % M.PER_YIELD == 0 then yield() end
     local n, dx, dz
-    if rand() < 0.7 then
-      -- towards a random target: the nearest point grows
+    local r = rand()
+    if r < 0.45 then
+      -- towards a random target: the nearest point grows (spreads the tree across the map)
       local tx, tz = x0 + (x1 - x0) * rand(), z0 + (z1 - z0) * rand()
       local best = math.huge
       for _, q in ipairs(nodes) do
@@ -80,16 +88,30 @@ function M.run(rand, ray, seeds, bounds, maxNodes, yield)
       end
       local l = math.sqrt(best)
       if l > 0 then dx, dz = (tx - n.x) / l, (tz - n.z) / l end
+    elseif r < 0.9 then
+      -- following on: a random point carries on the way it was reached, give or take 30 degrees (follows roads)
+      n = nodes[1 + math.floor(rand() * #nodes)]
+      local a = math.atan2(n.fx, n.fz) + (rand() - 0.5) * math.pi / 3
+      dx, dz = math.sin(a), math.cos(a)
     else
       -- filling in: a random point in a random direction
       n = nodes[1 + math.floor(rand() * #nodes)]
       local a = rand() * math.pi * 2
       dx, dz = math.sin(a), math.cos(a)
     end
-    local x, y, z
-    if dx then x, y, z = step(ray, n, dx, dz) end
-    if x and not crowded(x, z) then
-      add({x = x, y = y, z = z, fx = dx, fz = dz})
+    -- blocked (off the road, a wall)? turn further and further either way: growth bends along the road
+    local x, y, z, ux, uz
+    if dx then
+      for _, turn in ipairs(TURNS) do
+        local c, sn = math.cos(turn), math.sin(turn)
+        ux, uz = dx * c - dz * sn, dx * sn + dz * c
+        x, y, z = step(ray, n, ux, uz)
+        if x and not crowded(x, z) then break end
+        x = nil
+      end
+    end
+    if x then
+      add({x = x, y = y, z = z, fx = ux, fz = uz})
       fails = 0
     else
       fails = fails + 1

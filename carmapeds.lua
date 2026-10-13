@@ -338,17 +338,26 @@ local GRID_BEFORE, GRID_AFTER = 400, 50  -- m of track around the start line kep
 
 -- Maps without an AI line: their drivable ground, explored from the car spawn points (explore.lua) once at load.
 local explored  -- {x, y, z, fx, fz} points, once done
-local EXPLORE_MAX = 4000
+local EXPLORE_MAX = 8000
 
--- The map's extent (its static meshes), for maps without an AI line. nil if unknown.
+-- The map's extent, for maps without an AI line: all its static geometry, every .kn5 of it (a map split into
+-- several files has only the main one under the track root; the static root has them all). nil if unknown.
 local mapBounds
 local function getMapBounds()
   if mapBounds == nil then
     mapBounds = false
-    local ok, mn, mx, n = pcall(function() return ac.findNodes('trackRoot:yes'):getStaticAABB() end)
-    if ok and n and n > 0 and mx.x - mn.x > 10 and mx.z - mn.z > 10 and mx.x - mn.x < 1e6 and mx.z - mn.z < 1e6 then
-      mapBounds = {min = mn, max = mx}
+    local mn, mx
+    for _, root in ipairs({'trackRoot:yes', 'staticRoot:yes'}) do
+      local ok, a, b, n = pcall(function() return ac.findNodes(root):getStaticAABB() end)
+      if ok and n and n > 0 and b.x - a.x < 1e6 and b.z - a.z < 1e6 then
+        if not mn then mn, mx = vec3(a.x, a.y, a.z), vec3(b.x, b.y, b.z)
+        else
+          mn:set(math.min(mn.x, a.x), math.min(mn.y, a.y), math.min(mn.z, a.z))
+          mx:set(math.max(mx.x, b.x), math.max(mx.y, b.y), math.max(mx.z, b.z))
+        end
+      end
     end
+    if mn and mx.x - mn.x > 10 and mx.z - mn.z > 10 then mapBounds = {min = mn, max = mx} end
   end
   return mapBounds or nil
 end
