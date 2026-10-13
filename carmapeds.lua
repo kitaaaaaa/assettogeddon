@@ -338,7 +338,7 @@ local GRID_BEFORE, GRID_AFTER = 400, 50  -- m of track around the start line kep
 
 -- Maps without an AI line: their drivable ground, explored from the car spawn points (explore.lua) once at load.
 local explored  -- {x, y, z, fx, fz} points, once done
-local EXPLORE_MAX = 8000
+local EXPLORE_MAX = 12000
 
 -- The map's extent, for maps without an AI line: all its static geometry, every .kn5 of it (a map split into
 -- several files has only the main one under the track root; the static root has them all). nil if unknown.
@@ -1055,6 +1055,14 @@ local function describePlacement()
     parts[#parts + 1] = ('No AI line: explored %d points (%.1f km of ground), reaching %.1f km from the start%s.')
       :format(explored and #explored or 0, trackKm(), reach / 1000,
         b and (' (map %.1f x %.1f km)'):format((b.max.x - b.min.x) / 1000, (b.max.z - b.min.z) / 1000) or '')
+    local st = explore.lastStats
+    if st then
+      local why = {}
+      for k, v in pairs(st.rejected) do why[#why + 1] = ('%s %d'):format(k, v) end
+      table.sort(why)
+      parts[#parts + 1] = ('Exploration stopped: %s (%d attempts, %d raycasts; steps rejected: %s).')
+        :format(st.stopped, st.attempts, st.rays, #why > 0 and table.concat(why, ', ') or 'none')
+    end
   end
   parts[#parts + 1] = ('%d pedestrians, the farthest %.1f km from the start.'):format(#peds, far / 1000)
   data.mapInfo = table.concat(parts, ' ')

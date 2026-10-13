@@ -107,6 +107,35 @@ do
   check(far > 3000, ('fenced car park: finds the way out and follows the road (reached %.0f m of 3200)'):format(far))
 end
 
+-- Driver-like city: 6 x 6 km of 100 m blocks (30 m tall buildings) with 20 m streets, the spawn in a corner. It
+-- must spread across the whole grid of streets, within the raycast budget.
+do
+  local function inBlock(x, z)
+    if x < 0 or z < 0 or x > 6000 or z > 6000 then return false end
+    return x % 120 > 20 and z % 120 > 20
+  end
+  local function inMap(x, z) return x >= 0 and z >= 0 and x <= 6000 and z <= 6000 end
+  local grid = function(x, y, z, dx, dy, dz, len)
+    if dy < -0.99 then
+      local h = inBlock(x, z) and 30 or (inMap(x, z) and 0 or nil)
+      if h and y >= h and y - h <= len then return y - h end
+      return -1
+    end
+    if dy > 0.99 then return -1 end
+    for s = 0.5, len, 0.5 do
+      if y + dy * s < 30 and inBlock(x + dx * s, z + dz * s) then return s end
+    end
+    return -1
+  end
+  local rays = 0
+  local counted = function(...) rays = rays + 1 return grid(...) end
+  local pts = explore.run(rng.new(6), counted, {{x = 10, y = 0, z = 10}}, {min = {x = 0, z = 0}, max = {x = 6000, z = 6000}}, 12000)
+  local fx, fz, roofs = 0, 0, 0
+  for _, n in ipairs(pts) do fx, fz = math.max(fx, n.x), math.max(fz, n.z) if n.y > 1 then roofs = roofs + 1 end end
+  check(fx > 5000 and fz > 5000, ('city grid: spreads across it (%.0f, %.0f m of 6000), %d points, %d rays'):format(fx, fz, #pts, rays))
+  check(roofs == 0, 'city grid: never on a roof: ' .. roofs)
+end
+
 -- the same inputs give the same points (every client builds the same peds)
 local a = explore.run(rng.new(3), roads, {{x = 0, y = 0, z = 0}}, bounds, 300)
 local b = explore.run(rng.new(3), roads, {{x = 0, y = 0, z = 0}}, bounds, 300)
