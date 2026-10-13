@@ -54,7 +54,7 @@ function M.key(ev) return ('%d:%d:%d:%d'):format(ev.kind, ev.ped, ev.t, ev.car) 
 
 -- ---- building events -------------------------------------------------------------------------
 function M.kill(t, pedId, carSid, k, credits, bannerIndex)
-  local flags = (k.tossing and M.TOSSED or 0) + (k.exploded and M.EXPLODED or 0) + (k.projectile and M.NICE_SHOT or 0)
+  local flags = (k.tossing and M.TOSSED or 0) + (k.exploded and M.EXPLODED or 0) + (k.niceShot and M.NICE_SHOT or 0)
     + (k.carried and M.CARRIED or 0)
   local d, e
   if k.carried then d, e = clamp16(k.lx * 100), clamp16(k.lz * 100) else d, e = clamp16(k.vx * 100), clamp16(k.vz * 100) end
@@ -67,7 +67,7 @@ function M.killParams(ev)
   local carried = bit.band(ev.a, M.CARRIED) ~= 0
   return {
     impact = ev.c / 1e5, tossing = bit.band(ev.a, M.TOSSED) ~= 0, exploded = bit.band(ev.a, M.EXPLODED) ~= 0,
-    projectile = bit.band(ev.a, M.NICE_SHOT) ~= 0, carried = carried, spin = ev.b,
+    niceShot = bit.band(ev.a, M.NICE_SHOT) ~= 0, carried = carried, spin = ev.b,
     x = ev.x / 100, y = ev.y / 100, z = ev.z / 100,
     lx = carried and ev.d / 100 or 0, lz = carried and ev.e / 100 or 0,
     vx = carried and 0 or ev.d / 100, vz = carried and 0 or ev.e / 100,

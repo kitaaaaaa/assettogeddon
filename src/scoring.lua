@@ -113,9 +113,23 @@ function M.onImpact(state, pinned, impactX, impactZ, speed)
   return 0, nil
 end
 
--- C1 DoFancyHeadup: a banner replaces the current one unless that one is under 2 s old and ranks higher.
-function M.shouldShowBanner(current, currentTime, banner, now)
-  return not (current and now - currentTime <= 2000 and current.index > banner.index)
+M.BANNER_MS = 2000  -- each banner's time on screen
+M.MAX_QUEUED = 4    -- banners waiting beyond this are dropped
+
+-- Bonus banners queue up and show one after another (C1 replaced the one showing; here none is lost).
+function M.queueBanner(q, def)
+  if #q < M.MAX_QUEUED then q[#q + 1] = {def = def} end
+end
+
+-- The banner to show at `now` and how long it has been up (nil if none); finished ones leave the queue.
+function M.currentBanner(q, now)
+  while q[1] do
+    local b = q[1]
+    b.start = b.start or now
+    if now - b.start < M.BANNER_MS then return b.def, now - b.start end
+    table.remove(q, 1)
+  end
+  return nil
 end
 
 return M

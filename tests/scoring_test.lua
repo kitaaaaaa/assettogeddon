@@ -45,5 +45,23 @@ check(bn == nil and cr == 100, 'normal kill: no bonus')
 cr, bn = scoring.onKill(s2, {ped = ped, niceShot = true}, {attitude = 1, speed = 20}, 10000)
 check(bn == scoring.BANNER.niceShot and cr == 400, 'nice shot x4')
 
+-- banners queue up and show one after another, 2 s each; beyond 4 waiting, new ones are dropped
+do
+  local q = {}
+  scoring.queueBanner(q, scoring.BANNER.artistic)
+  scoring.queueBanner(q, scoring.BANNER.niceShot)
+  scoring.queueBanner(q, scoring.BANNER.combo2)
+  local d1, t1 = scoring.currentBanner(q, 1000)
+  local d2 = scoring.currentBanner(q, 2500)
+  local d3, t3 = scoring.currentBanner(q, 3100)
+  local d4 = scoring.currentBanner(q, 5200)
+  local d5 = scoring.currentBanner(q, 7300)
+  check(d1 == scoring.BANNER.artistic and t1 == 0 and d2 == scoring.BANNER.artistic, 'first banner shows for 2 s')
+  check(d3 == scoring.BANNER.niceShot and t3 == 0, 'then the second')
+  check(d4 == scoring.BANNER.combo2 and d5 == nil, 'then the third, then none')
+  for _ = 1, 6 do scoring.queueBanner(q, scoring.BANNER.splatter) end
+  check(#q == scoring.MAX_QUEUED, 'queue capped')
+end
+
 print(failures == 0 and 'all scoring tests passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)

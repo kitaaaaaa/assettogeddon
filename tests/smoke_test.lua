@@ -134,22 +134,54 @@ st = H.state()
 check(st.scores[1] and st.scores[1].credits - before == 1500, 'cunning stunt pays the middle skill level value (1500): got '
   .. ((st.scores[1] and st.scores[1].credits or 0) - before))
 
--- nice shot: a light hit with no wall around launches an object; with a wall next to the car it doesn't
-local c0 = H.cars[0]
-local function lightHit()
-  H.placeCar(0, c0.position.x, c0.position.z, 0, 20) H.frame()
-  c0.collisionDepth = 0.05 H.frame()
-  c0.collisionDepth = 0 for _ = 1, 12 do H.frame() end
+-- 'Nice shot, sir!': a ped hit by a car still out of control after bouncing off a wall. Driving straight into
+-- one isn't; bouncing off a wall and spinning into one is.
+do
+  local events = require('src/events')
+  local c0 = H.cars[0]
+  local function freePed()
+    for _, p in ipairs(H.state().peds) do
+      if p.hitPoints >= 0 and not p.flagman and not p.gridGirl and not p.scared and p.def.ref < 100 then return p end
+    end
+  end
+  local function niceShotFlag(ped)
+    local list = H.state().log.list
+    for i = #list, 1, -1 do
+      local ev = list[i]
+      if ev.kind == events.KILL and ev.ped == ped.id then return bit.band(ev.a, events.NICE_SHOT) ~= 0 end
+    end
+  end
+  local function runInto(target, spin)
+    local z = c0.position.z
+    for f = 1, 120 do
+      if target.hitPoints < 0 then break end
+      z = z + 15 / 60
+      if spin then  -- heading turning at 3.6 rad/s
+        local a = f * 0.06
+        c0.look:set(math.sin(a), 0, math.cos(a)) c0.side:set(math.cos(a), 0, -math.sin(a))
+      end
+      H.placeCar(0, target.x, z, 0, 15)
+      H.frame()
+    end
+    c0.look:set(0, 0, 1) c0.side:set(1, 0, 0)
+  end
+  for _ = 1, 200 do H.frame() end
+  local a = freePed()
+  H.placeCar(0, a.x, a.z - 4, 0, 15) H.frame()
+  runInto(a, false)
+  check(a.hitPoints < 0 and niceShotFlag(a) == false, 'driving straight into a ped is no nice shot')
+  for _ = 1, 200 do H.frame() end
+  local b = freePed()
+  -- into a wall at 15 m/s, down to 2 m/s
+  H.placeCar(0, b.x, b.z - 6, 0, 15) H.frame()
+  H.walls = true c0.collisionDepth = 0.1
+  H.placeCar(0, b.x, b.z - 6, 0, 2)
+  for _ = 1, 12 do H.frame() end
+  H.walls = false c0.collisionDepth = 0
+  H.placeCar(0, b.x, b.z - 4, 0, 15) H.frame()
+  runInto(b, true)
+  check(b.hitPoints < 0 and niceShotFlag(b) == true, 'off a wall and spinning into a ped: nice shot')
 end
-for _ = 1, 200 do H.frame() end
-local n0 = #H.state().projectiles
-H.walls = true
-lightHit()
-check(#H.state().projectiles == n0, 'scraping a wall launches nothing')
-H.walls = false
-for _ = 1, 120 do H.frame() end
-lightHit()
-check(#H.state().projectiles >= 1, 'hitting something movable launches an object')
 check(H.audioCreated > 0, 'audio events created')
 check((H.loudStarts or 0) == 0, 'sounds start 2+ frames after being placed: ' .. (H.loudStarts or 0) .. ' too soon')
 local audible = 0
@@ -170,6 +202,7 @@ for _, v in ipairs({-math.huge, math.huge, 0 / 0, -1e18}) do
   H.sim.timeToSessionStart = v
   for _ = 1, 5 do H.frame() end
 end
+H.placeCar(0, 900, 0, 0, 0) H.placeCar(1, 900, 30, 0, 0)  -- parked far away: no new kills
 -- restarting the session: the clock goes back to before the start. A fresh start: everyone alive, no scores,
 -- and the old run's kills don't happen again
 H.sim.timeToSessionStart = 4000
@@ -179,7 +212,7 @@ local deadAfter, credits = 0, 0
 for _, p in ipairs(st.peds) do if p.hitPoints < 0 then deadAfter = deadAfter + 1 end end
 for _, sc in pairs(st.scores) do credits = credits + sc.credits end
 check(deadAfter == 0 and credits == 0 and #st.log.list == 0, ('restart: fresh start (dead %d, credits %d, events %d)'):format(deadAfter, credits, #st.log.list))
-H.cars[0].velocity:set(0, 0, 0) H.cars[0].speedMs = 0 H.cars[1].velocity:set(0, 0, 0) H.cars[1].speedMs = 0
+H.placeCar(0, 900, 0, 0, 0) H.placeCar(1, 900, 30, 0, 0)  -- parked far away
 H.sim.cameraPosition:set(5000, 2, 5000)
 for _ = 1, 600 do H.frame() end  -- past the old kills' times
 deadAfter = 0

@@ -33,8 +33,7 @@ local peds = {}     -- every ped; ids are the same on every client
 local pedsById = {}
 local cars = {}     -- per local car index: {state, prev..., wheels = {...}}
 local bloodTrails = {} -- {x1,y1,z1, x2,y2,z2, time}
-local projectiles = {} -- knocked objects for 'Nice shot, sir!'
-local banner = nil     -- {def, time}
+local bannerQueue = {} -- bonus banners waiting/showing (scoring.queueBanner)
 local popups = {}      -- {text, time}
 local seed = 1
 local sendEventsData   -- online message buffer (set up once online)
@@ -240,7 +239,7 @@ local function carInfo(i, dt)
   local c = cars[i]
   if not c then
     c = {index = i, state = scoring.newCarState(), wheels = {}, prevUp = car.up:clone(), prevVel = car.velocity:clone(),
-      wasColliding = false, lastProjectile = -1e9, prevPos = car.position:clone()}
+      wasColliding = false, ricochetUntil = -1e9, prevPos = car.position:clone()}
     for w = 1, 4 do c.wheels[w] = {blood = 0} end
     cars[i] = c
   end
@@ -267,6 +266,15 @@ local function carInfo(i, dt)
   c.prevUp:set(car.up)
   local vh = math.sqrt(c.vx * c.vx + c.vz * c.vz)
   c.slipAngle = vh > 1 and math.deg(math.acos(math.max(-1, math.min(1, math.abs(c.vx * c.dirX + c.vz * c.dirZ) / vh)))) or 0
+  -- spinning: how fast its heading turns (rad/s)
+  if c.prevDirX and dt > 0 then
+    local cross = c.prevDirX * c.dirZ - c.prevDirZ * c.dirX
+    local dot = c.prevDirX * c.dirX + c.prevDirZ * c.dirZ
+    c.yawRate = math.abs(math.atan2(cross, dot)) / dt
+  else
+    c.yawRate = 0
+  end
+  c.prevDirX, c.prevDirZ = c.dirX, c.dirZ
   c.reversing = (c.vx * c.lookX + c.vy * c.lookY + c.vz * c.lookZ) < -0.5
   for w = 0, 3 do
     local wp = car.wheels[w].position
@@ -545,12 +553,7 @@ end
 local function showAward(sid, credits, bannerDef)
   if sid ~= carSid(sim.focusedCar) then return end
   if credits > 0 then popups[#popups + 1] = {text = ('+%d'):format(credits), time = os.preciseClock() * 1000} end
-  if bannerDef then
-    local now = os.preciseClock() * 1000
-    if scoring.shouldShowBanner(banner and banner.def, banner and banner.time or 0, bannerDef, now) then
-      banner = {def = bannerDef, time = now}
-    end
-  end
+  if bannerDef then scoring.queueBanner(bannerQueue, bannerDef) end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -660,7 +663,7 @@ end
 
 local function rebuild(T)
   pedlogic.gibs = {}
-  bloodTrails, projectiles, popups, banner = {}, {}, {}, nil
+  bloodTrails, popups, bannerQueue = {}, {}, {}
   scores = {}
   for _, ped in ipairs(peds) do
     pedlogic.respawn(ped, 0)
@@ -698,11 +701,12 @@ local function rebuild(T)
   end
 end
 -- ---------------------------------------------------------------------------------------------
--- Car-side bonuses and 'Nice shot, sir!' objects (decided by the client deciding for the car)
+-- Car-side bonuses: piledriver, 'Nice shot, sir!' (decided by the client deciding for the car)
 local function scoreEvent(c, credits, bannerDef)
   if credits > 0 then emit(events.score(clockT, c.sid, credits, bannerDef and bannerDef.index)) end
 end
 
+local RICOCHET_MS, NICE_SHOT_SLIP, NICE_SHOT_YAW = 2000, 20, 1.5  -- ms; degrees; rad/s
 local MAX_CLOCK = 1e9  -- ms (11 days): session clocks beyond this aren't real
 local wasReplaying = false
 
@@ -716,6 +720,9 @@ local function updateImpacts(c)
     -- any of its kills from the last 1.5 s right against the car count.
     local ix, iz = -(dv.x * c.sideX + dv.z * c.sideZ), -(dv.x * c.lookX + dv.z * c.lookZ)
     local il = math.sqrt(ix * ix + iz * iz)
+    -- off a wall (track geometry right by the car): for 2 s, a ped it hits while still out of control is a
+    -- 'Nice shot, sir!' (C1: a ped killed by something the car knocked; a Lua app can't see object collisions)
+    if staticGeometryAround(c) then c.ricochetUntil = clockT + RICOCHET_MS end
     if il > 0 then
       local pinned = {}
       for _, ped in ipairs(peds) do
@@ -734,46 +741,17 @@ local function updateImpacts(c)
         scoreEvent(c, credits, b)
       end
     end
-  elseif c.speed > 5 and clockT - c.lastProjectile > 1500 and not staticGeometryAround(c) then
-    -- a light hit at speed with no wall around: something movable (a cone): it flies on and can hit peds
-    -- ('Nice shot, sir!'). Walls and other track geometry never count.
-    c.lastProjectile = clockT
-    local fx = c.vx / math.max(c.speed, 0.1)
-    local fz = c.vz / math.max(c.speed, 0.1)
-    projectiles[#projectiles + 1] = {car = c, x = c.x + fx * (c.halfL + 1), y = c.y, z = c.z + fz * (c.halfL + 1),
-      vx = c.vx * 1.2, vz = c.vz * 1.2, untilMs = clockT + 2000}
   end
 end
 
 -- A kill decided here: score it and send it.
 local function decidedKill(ped, kill, c)
   kill.ped = ped
-  kill.niceShot = kill.projectile
+  -- out of control after bouncing off a wall: sliding or spinning
+  kill.niceShot = simT <= c.ricochetUntil and (c.slipAngle >= NICE_SHOT_SLIP or c.yawRate >= NICE_SHOT_YAW)
   local credits, b = scoring.onKill(c.state, kill, c, simT)
   ped.killerSid = c.sid
   emit(events.kill(simT, ped.id, c.sid, kill, credits, b and b.index))
-end
-
-local function updateProjectiles(dtMs)
-  local keep = {}
-  for _, p in ipairs(projectiles) do
-    if simT < p.untilMs then
-      local s = dtMs / 1000
-      p.x, p.z = p.x + p.vx * s, p.z + p.vz * s
-      local damp = math.max(0, 1 - 0.8 * s)
-      p.vx, p.vz = p.vx * damp, p.vz * damp
-      for _, ped in ipairs(peds) do
-        if not pedlogic.isDead(ped) and (ped.x - p.x) ^ 2 + (ped.z - p.z) ^ 2 < 1.2 and math.abs(ped.y - p.y) < 3 then
-          local v = math.sqrt(p.vx * p.vx + p.vz * p.vz)
-          local fake = {index = p.car.index, speed = v, vx = p.vx, vy = 0, vz = p.vz}
-          local kill = pedlogic.hit(ped, fake, {side = 'front', lx = 0, lz = 0}, simT, true)
-          if kill then decidedKill(ped, kill, p.car) end
-        end
-      end
-      keep[#keep + 1] = p
-    end
-  end
-  projectiles = keep
 end
 
 local function updateBlood(c)
@@ -895,7 +873,6 @@ local function tick(t)
       if not touched then ped.collidedLastTime = false ped.satUpon = false end
     end
   end
-  if not replaying then updateProjectiles(TICK) end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -1229,13 +1206,12 @@ function script.fullscreenUI()
     ui.dwriteTextAligned(('CREDITS %d   KILLS %d'):format(c.credits, c.kills), 28, ui.Alignment.End, ui.Alignment.Start, vec2(400, 40), false, rgbm(1, 0.85, 0.1, 1))
     ui.popDWriteFont()
   end
-  if banner then
-    local t = nowMs - banner.time
-    if t > 2000 then banner = nil
-    else
+  local def, t = scoring.currentBanner(bannerQueue, nowMs)
+  if def then
+    do
       -- slide in from the right, hold, slide out to the left (C1 fancy head-up)
-      local tex = textures[banner.def.image]
-      local img = pedlogic.images[banner.def.image]
+      local tex = textures[def.image]
+      local img = pedlogic.images[def.image]
       local w, h = img and img.w * 1.5 or 600, img and img.h * 1.5 or 60
       local x
       if t < 250 then x = screen.x - (screen.x / 2 + w / 2) * (t / 250)
@@ -1247,7 +1223,7 @@ function script.fullscreenUI()
       else
         ui.pushDWriteFont('Segoe UI;Weight=Bold')
         ui.setCursor(vec2(x, y))
-        ui.dwriteTextAligned(banner.def.text, 36, ui.Alignment.Center, ui.Alignment.Center, vec2(w, h), false, rgbm(1, 0.2, 0.1, 1))
+        ui.dwriteTextAligned(def.text, 36, ui.Alignment.Center, ui.Alignment.Center, vec2(w, h), false, rgbm(1, 0.2, 0.1, 1))
         ui.popDWriteFont()
       end
     end
@@ -1337,7 +1313,7 @@ pedlogic.mirrorBearings = settings.mirrorBearings
 -- offline tests (tests/smoke_test.lua) look at the internals through this; nil in AC
 if __carmapedsTest then
   __carmapedsTest.state = function()
-    return {peds = peds, cars = cars, projectiles = projectiles, audioFiles = audioFiles, playing = playing, scores = scores, log = eventLog,
+    return {peds = peds, cars = cars, bannerQueue = bannerQueue, audioFiles = audioFiles, playing = playing, scores = scores, log = eventLog,
       simT = simT, clockT = clockT}
   end
 end

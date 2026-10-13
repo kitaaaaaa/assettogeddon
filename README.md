@@ -57,13 +57,14 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
     its wheels for half a second; once per 10 s, worth GENERAL.TXT's value for the middle skill level (1000 in
     the original data). 
 
+  Banners queue up and show one after another, 2 s each (up to 4 waiting).
+
 ## Approximations
 
 - **Nice shot, sir!** In C1 this is a ped killed by an object a car knocked into it. A Lua app can't see
-  collisions between track objects and peds, so: when a car hits something lightly at speed, and it isn't
-  another car and there's no wall or other track geometry right next to the car (movable objects such as
-  cones aren't part of the track's collision surfaces), an invisible object flies on from the impact for up
-  to 2 s, and peds it passes count as Nice Shot kills. Wall hits never count.
+  collisions between track objects and peds, so it's a ped hit by a car that is still out of control after
+  bouncing off a wall: within 2 s of a hard wall hit (a speed change of over 3 m/s), while the car slides at 20
+  degrees or more or spins at 1.5 rad/s or more.
 - **Tumbling** uses the car's measured pitch/roll rate (over 2.5 rad/s) instead of C1's physics state.
 - Peds only run their logic within 400 m of the camera or 200 m of a car (calm ones far away need none:
   their place is known from the clock).
