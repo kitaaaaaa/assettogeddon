@@ -1028,6 +1028,38 @@ end
 
 -- ---------------------------------------------------------------------------------------------
 local populating -- coroutine building the peds
+-- A summary of the map and where the peds went (AI line or not, how far exploration and peds reach), logged and
+-- kept in data.mapInfo for the settings window.
+local function describePlacement()
+  local sx, sz
+  if splineAvailable() then
+    local c = ac.trackProgressToWorldCoordinate(0)
+    sx, sz = c.x, c.z
+  elseif explored and explored[1] then
+    sx, sz = explored[1].x, explored[1].z
+  end
+  local far = 0
+  if sx then
+    for _, p in ipairs(peds) do
+      local hp = p.homePath or p.path
+      far = math.max(far, math.sqrt((hp.x[1] - sx) ^ 2 + (hp.z[1] - sz) ^ 2))
+    end
+  end
+  local parts = {}
+  if splineAvailable() then
+    parts[#parts + 1] = ('AI line: %.1f km.'):format(trackKm())
+  else
+    local reach = 0
+    for _, n in ipairs(explored or {}) do reach = math.max(reach, math.sqrt((n.x - sx) ^ 2 + (n.z - sz) ^ 2)) end
+    local b = getMapBounds()
+    parts[#parts + 1] = ('No AI line: explored %d points (%.1f km of ground), reaching %.1f km from the start%s.')
+      :format(explored and #explored or 0, trackKm(), reach / 1000,
+        b and (' (map %.1f x %.1f km)'):format((b.max.x - b.min.x) / 1000, (b.max.z - b.min.z) / 1000) or '')
+  end
+  parts[#parts + 1] = ('%d pedestrians, the farthest %.1f km from the start.'):format(#peds, far / 1000)
+  data.mapInfo = table.concat(parts, ' ')
+  log(data.mapInfo)
+end
 local populatedCount
 
 local function startPopulating()
@@ -1043,7 +1075,9 @@ local function startExploring()
   exploring = coroutine.create(exploreTask)
 end
 
-function script.update(dt)
+-- The loading stages, a step per frame: the C1 data, exploring the map (no AI line), placing the peds. Returns
+-- true while one of them is still running.
+local function stepLoading()
   if loader then
     local ok, err = coroutine.resume(loader)
     if not ok then
@@ -1057,9 +1091,9 @@ function script.update(dt)
         startExploring()
       end
     end
-    return
+    return true
   end
-  if not data then return end
+  if not data then return true end
   if exploring then
     local ok, nodes = coroutine.resume(exploring)
     if not ok then
@@ -1070,7 +1104,7 @@ function script.update(dt)
       log(('no AI line: explored %d points (%.1f km) of drivable ground from the spawn points'):format(#nodes, trackKm()))
       startPopulating()
     end
-    return
+    return true
   end
   if populating then
     local ok, list, byId = coroutine.resume(populating)
@@ -1084,12 +1118,18 @@ function script.update(dt)
       for _, p in ipairs(peds) do if p.gridGirl then girls = girls + 1 end end
       log(('placed %d pedestrians (seed %d)%s, %d grid girls'):format(#peds, seed,
         pedsById[0] and ', flagman at the start line' or '', girls))
+      describePlacement()
       if not replayStream then openReplayStream() end
       simT = nil
     end
-    return
+    return true
   end
 
+  return false
+end
+
+function script.update(dt)
+  if stepLoading() then return end
   -- online: hellos, and the host's settings
   if online and not sendEvents then
     mySid = carSid(0)
@@ -1407,6 +1447,7 @@ end
 
 function script.windowSettings(dt)
   ui.textWrapped('Carmageddon data is read from the DATA folder in this app\'s folder.')
+  if data and data.mapInfo then ui.textWrapped(data.mapInfo) end
   if ui.button('Reload') then startLoading() end
   ui.sameLine()
   if not online then

@@ -83,7 +83,9 @@ Two things couldn't be checked without running the game:
 - **Sprites mirrored** (text or details reversed): settings > *Mirror sprites left/right*.
 - **Peds facing the wrong way when walking sideways**: settings > *Swap left/right facing animations*.
 
-Load warnings (missing images and so on) go to the CSP Lua log.
+Load warnings (missing images and so on) go to the CSP log (`Documents\Assetto Corsa\logs\custom_shaders_patch.log`,
+lines with `[carmapeds]`). The settings window shows what placing the peds found: whether the map has an AI
+line, how far exploration reached on maps without one, and how far from the start the peds go.
 
 ## Multiplayer and replays
 
