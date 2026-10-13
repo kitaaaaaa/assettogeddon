@@ -6,6 +6,7 @@ local scoring = require('src/scoring')
 local png = require('src/png')
 local rng = require('src/rng')
 local paths = require('src/paths')
+local explore = require('src/explore')
 local events = require('src/events')
 
 local settings = ac.storage{
@@ -335,6 +336,10 @@ end
 -- client builds the same peds with the same ids, paths and schedules.
 local GRID_BEFORE, GRID_AFTER = 400, 50  -- m of track around the start line kept free (grid, pit exit)
 
+-- Maps without an AI line: their drivable ground, explored from the car spawn points (explore.lua) once at load.
+local explored  -- {x, y, z, fx, fz} points, once done
+local EXPLORE_MAX = 4000
+
 -- The map's extent (its static meshes), for maps without an AI line. nil if unknown.
 local mapBounds
 local function getMapBounds()
@@ -412,8 +417,15 @@ local function randomSpot(r)
         end
         if gy and (onTrack or standable(x, gy, z)) then return x, gy, z, fwd.x, fwd.z end
       end
+    elseif explored and #explored > 0 then
+      -- no AI line: near a random point of the explored drivable ground
+      local n = explored[1 + math.floor(r() * #explored)]
+      local x = n.x + (r() - 0.5) * explore.STEP
+      local z = n.z + (r() - 0.5) * explore.STEP
+      local gy = pedlogic.groundBelow(ray, x, n.y + 1.5, z, 3)
+      if gy and ray(x, gy + 0.1, z, 0, 1, 0, HEADROOM) == -1 and standable(x, gy, z) then return x, gy, z, n.fx, n.fz end
     elseif getMapBounds() then
-      -- no AI line: anywhere on the map, on any layer with headroom and flat enough
+      -- no AI line, nothing explored: anywhere on the map, on any layer with headroom and flat enough
       local b = getMapBounds()
       local x = b.min.x + (b.max.x - b.min.x) * r()
       local z = b.min.z + (b.max.z - b.min.z) * r()
@@ -467,6 +479,30 @@ local function spawnNodes(prefix)
     list[#list + 1] = {x = m.position.x, y = m.position.y, z = m.position.z, lx = m.look.x, lz = m.look.z}
   end
   return list
+end
+
+-- Explores a map without an AI line (a coroutine): from every car spawn point (grid, pits, hotlap, time attack;
+-- the map's origin if it has none), aiming across the map's extent. The same on every client.
+local function exploreTask()
+  local seeds = {}
+  for _, prefix in ipairs({'AC_START_', 'AC_PIT_', 'AC_HOTLAP_START_', 'AC_TIME_ATTACK_'}) do
+    for _, n in ipairs(spawnNodes(prefix)) do
+      local gy = pedlogic.groundBelow(ray, n.x, n.y + 2, n.z, 6)
+      if gy then seeds[#seeds + 1] = {x = n.x, y = gy, z = n.z} end
+    end
+  end
+  if #seeds == 0 then
+    local gy = pedlogic.groundBelow(ray, 0, 500, 0, 1000)
+    if gy then seeds[1] = {x = 0, y = gy, z = 0} end
+  end
+  local bounds = getMapBounds()
+  if not bounds and seeds[1] then
+    local s = seeds[1]
+    bounds = {min = {x = s.x - 3000, z = s.z - 3000}, max = {x = s.x + 3000, z = s.z + 3000}}
+  end
+  if not bounds then return {} end
+  local r = rng.new(rng.hash(ac.getTrackFullID('/') .. ':explore'))
+  return explore.run(r, ray, seeds, bounds, EXPLORE_MAX, coroutine.yield)
 end
 
 -- Grid girls (ped 19): beside every second grid slot (up to 8), on the side away from the other grid column,
@@ -584,6 +620,7 @@ end
 local MIN_PEDS, MAX_PEDS = 10, 4000
 local function trackKm()
   if splineAvailable() and sim.trackLengthM > 0 then return sim.trackLengthM / 1000 end
+  if explored and #explored > 0 then return math.max(0.5, #explored * explore.STEP / 1000) end
   local b = getMapBounds()
   if b then return ((b.max.x - b.min.x) + (b.max.z - b.min.z)) / 1000 end
   return 5
@@ -990,6 +1027,13 @@ local function startPopulating()
   populating = coroutine.create(function() return populateTask(populatedCount) end)
 end
 
+-- Maps without an AI line: explore their drivable ground first (once), then place the peds.
+local exploring
+local function startExploring()
+  if splineAvailable() or explored then startPopulating() return end
+  exploring = coroutine.create(exploreTask)
+end
+
 function script.update(dt)
   if loader then
     local ok, err = coroutine.resume(loader)
@@ -1001,12 +1045,24 @@ function script.update(dt)
       if data then
         if data.cunningStunt then scoring.STUNT_CREDITS = data.cunningStunt[2] end
         preloadSounds()
-        startPopulating()
+        startExploring()
       end
     end
     return
   end
   if not data then return end
+  if exploring then
+    local ok, nodes = coroutine.resume(exploring)
+    if not ok then
+      loadError, exploring = tostring(nodes), nil
+      log(nodes)
+    elseif coroutine.status(exploring) == 'dead' then
+      exploring, explored = nil, nodes
+      log(('no AI line: explored %d points (%.1f km) of drivable ground from the spawn points'):format(#nodes, trackKm()))
+      startPopulating()
+    end
+    return
+  end
   if populating then
     local ok, list, byId = coroutine.resume(populating)
     if not ok then

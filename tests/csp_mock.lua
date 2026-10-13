@@ -100,7 +100,8 @@ return function(opts)
     getCar = function(i) return H.cars[i] end,
     log = function(...) local t = {} for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end H.logs[#H.logs + 1] = table.concat(t, ' ') end,
     getTrackFullID = function(sep) return 'ks_test' .. sep .. 'layout' end,
-    trackProgressToWorldCoordinate = function(p) return vec3(0, 0, p * 2000 - 1000) end,
+    -- opts.noSpline: a map without an AI line (every progress gives the same point)
+    trackProgressToWorldCoordinate = function(p) return opts.noSpline and vec3(0, 0, 0) or vec3(0, 0, p * 2000 - 1000) end,
     getTrackAISplineSides = function(p) return vec2(6, 6) end,
     -- the track's grid: AC_START_0..9, two staggered columns (x = -2 / +2), 8 m apart, behind the start line
     findNodes = function(name)
@@ -175,7 +176,10 @@ return function(opts)
     local onDeck = d and pos.x >= d.x0 and pos.x <= d.x1 and pos.z >= d.z0 and pos.z <= d.z1
     if dir.y < -0.99 then
       local best = -1
-      for _, h in ipairs(onDeck and {0, d.bottom, d.top} or {0}) do
+      -- opts.groundAt(x, z): where there is ground at all (default everywhere)
+      local hs = onDeck and {d.bottom, d.top} or {}
+      if not opts.groundAt or opts.groundAt(pos.x, pos.z) then hs[#hs + 1] = 0 end
+      for _, h in ipairs(hs) do
         if h <= pos.y and pos.y - h <= len and (best == -1 or pos.y - h < best) then best = pos.y - h end
       end
       return best
