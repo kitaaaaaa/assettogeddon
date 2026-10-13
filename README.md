@@ -42,7 +42,7 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   the gibs fly. A first zero-speed touch turns the ped around; still touching on the next frame kills it.
   Thrown or dropped corpses keep some of the car's speed and slide until they stop, against walls or over edges.
 - **Corpses**: running over one again bursts it and puts blood on the wheels that touched it, which leave red
-  tyre tracks for a few metres. Tracks fade after 30 s. Peds can be w set to respawn after a while, or not at all, as in the original game.
+  tyre tracks for a few metres. Tracks fade after 30 s. Peds can be set to respawn after a while, or not at all, as in the original game.
 - **Scoring**, per car (the app window shows the table; the HUD shows the car you're watching): the ped's
   credit value from the game data, the combo multiplier for kills within a second of each other (up to 5x),
   x2 when the ped explodes, and the bonuses with C1's banners:
