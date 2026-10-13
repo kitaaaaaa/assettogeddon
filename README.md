@@ -19,8 +19,11 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 
 ## What it does
 
-- **Pedestrians**: a few hundred (adjustable) on random spots: half on the track and just beside it, half anywhere
-  on the surfaces cars can touch (grass, run-off, verges...) within 150 m of it, where the ground is flat enough; using every
+- **Pedestrians**: 60 per km of track by default (adjustable; at most 4000), on random spots: half on the track and
+  just beside it, half anywhere on the surfaces cars can touch (grass, run-off, verges...) within 150 m of it,
+  where the ground is flat enough. Where surfaces are stacked (a road in a tunnel, under a bridge), peds go on
+  every layer with at least 2 m of headroom; on-track ones on the racing line's own layer. Maps without an AI
+  line get peds anywhere on the map (counted per km of its width plus depth). Every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
   with the rest.  Placement comes from the track's name, so a track always gets the
   same layout. 
@@ -35,8 +38,11 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   danger level from each approaching car, its action choice (stand, walk, run, ...) by danger and chance,
   direction-dependent animation sequences and frame timing, sounds, gravity and fall damage. C1 peds walk along
   paths placed on each track; AC tracks have none, so each ped gets a generated one. Calm peds walk theirs back and forth with pauses;
-  frightened ones run straight away from the danger, turning aside for walls, kerbs and drops. Where a frightened
-  ped calms down, it gets a new path.
+  frightened ones run, mostly sideways off the car's line (to the side they're on), now and then straight away
+  from it, turning aside for walls, kerbs and drops. Each scare is a run of its own length: mostly 12-40 m, about
+  1 in 6 short (3-8 m) and faster the shorter it is; it carries on to its end after the car has passed. Two
+  settings scale how fast and how far they run (online, the host's apply). Where a frightened ped calms down,
+  it gets a new path.
 - **Hits**: any car hitting a ped kills it, as in C1: a swept box test so fast cars don't pass through.
   Slow hits carry the ped on the car for a moment, fast ones throw it in the air, and
   the gibs fly. A first zero-speed touch turns the ped around; still touching on the next frame kills it.

@@ -70,7 +70,7 @@ end
 check(moved, 'a calm ped walks its path')
 check(ped.width and math.abs(ped.height2 - 0.25 * 6.9) < 1e-9, 'sprite height from the data (0.25 units = 1.725 m)')
 
--- danger: a fast car heading at the ped makes it run (action 2) away from the car, along its path
+-- danger: a fast car heading at the ped makes it run (action 2), sideways off the car's line
 ped = newPed(0, 0, 0, now)  -- mid-path, room to run either way
 local z0 = ped.z
 local car = {index = 0, x = ped.x, y = 0, z = ped.z - 10, dirX = 0, dirZ = 1, speed = 25, human = true}
@@ -83,7 +83,7 @@ pedlogic.update(ped, {now = now, dtMs = 16, cars = {car}, camX = 0, camZ = -20, 
 check(ped.action == 2, 'ped runs')
 check(sounds[#sounds] == 4200, 'run sound played')
 for _ = 1, 30 do now = now + 16; pedlogic.update(ped, {now = now, dtMs = 16, cars = {car}, camX = 0, camZ = -20, ray = flat}) end
-check(ped.dirZ > 0 and ped.z > z0 and ped.x == 0, 'ped runs away from the car, along its path')
+check(math.abs(ped.x) > 1 and math.abs(ped.z - z0) < 0.2, ('ped runs sideways off the car\'s line (x %.2f, z %.2f)'):format(ped.x, ped.z - z0))
 local carBehind = {index = 0, x = ped.x, y = 0, z = ped.z + 30, dirX = 0, dirZ = 1, speed = 25}
 check(pedlogic.dangerLevel(ped, {carBehind}) == 0, 'no danger from a car moving away')
 
@@ -185,8 +185,68 @@ do
     car.z = car.z + 6 * 0.016
     pedlogic.update(f, {now = t, dtMs = 16, cars = {car}, camX = 200, camZ = car.z - 6, ray = flat})
   end
-  check(f.scared, 'fleeing ped is scared')
-  check(f.z - z0 > 8, ('fleeing ped runs on past its path (%.1f m from the start, path is 6 m)'):format(f.z - z0))
+  local moved = math.sqrt((f.x - 200) ^ 2 + (f.z - z0) ^ 2)
+  check(moved > 6, ('fleeing ped runs on past its path (%.1f m from the start, path is 6 m)'):format(moved))
+  check(math.abs(f.x - 200) > 3, ('fleeing ped gets off the car\'s line (%.1f m to the side)'):format(math.abs(f.x - 200)))
+end
+
+-- a car coming down the line just beside a ped: most runs go sideways off the car's line, to the ped's own side;
+-- some straight away from the car (each ped's first run is fixed by its id: pick one of each)
+local function firstRunStraight(id) local p = {id = id} pedlogic.planRun(p) return p.runStraight end
+local function scareAndRun(id)
+  local q = pedlogic.new(def, id, straightPath(400, 0), 500, 0)
+  local x0, z0 = q.x, q.z
+  local car = {index = 0, x = x0 - 1, y = 0, z = z0 - 30, dirX = 0, dirZ = 1, vx = 0, vz = 10, speed = 10, human = true,
+    halfW = 1, halfL = 2.2, halfH = 0.7}
+  local t = 0
+  for _ = 1, 150 do
+    t = t + 16
+    car.z = car.z + 10 * 0.016
+    pedlogic.update(q, {now = t, dtMs = 16, cars = {car}, camX = x0, camZ = car.z - 6, ray = flat})
+    if q.scared then break end
+  end
+  local sx, sz = q.x, q.z
+  for _ = 1, 40 do  -- 0.64 s of running
+    t = t + 16
+    car.z = car.z + 10 * 0.016
+    pedlogic.update(q, {now = t, dtMs = 16, cars = {car}, camX = x0, camZ = car.z - 6, ray = flat})
+  end
+  return q, q.x - sx, q.z - sz
+end
+do
+  local sideId, straightId = 1000, 1000
+  while firstRunStraight(sideId) do sideId = sideId + 1 end
+  while not firstRunStraight(straightId) do straightId = straightId + 1 end
+  local q, dx, dz = scareAndRun(sideId)
+  check(q.scared and dx > 1 and math.abs(dx) > 3 * math.abs(dz),
+    ('sideways run: off the car\'s line, to its own side (moved %.2f across, %.2f along)'):format(dx, dz))
+  q, dx, dz = scareAndRun(straightId)
+  check(q.scared and dz > 1 and math.abs(dz) > 1.5 * math.abs(dx),
+    ('straight run: away from the car (moved %.2f across, %.2f along)'):format(dx, dz))
+end
+
+-- runs: most long (12-40 m), some short (3-8 m); short ones faster; both scale with the settings
+do
+  local short, total, sum, minD, fastShort, slowLong = 0, 0, 0, 1e9, 0, 0
+  for id = 1, 2000 do
+    local p = {id = id}
+    pedlogic.planRun(p)
+    total, sum, minD = total + 1, sum + p.runLeft, math.min(minD, p.runLeft)
+    if p.runLeft <= 8 then short = short + 1 fastShort = math.max(fastShort, p.runMult)
+    else slowLong = math.max(slowLong, p.runMult) end
+  end
+  check(short / total > 0.1 and short / total < 0.2, ('about 1 in 6 runs short: %.2f'):format(short / total))
+  check(sum / total > 20 and sum / total < 30 and minD >= 3, ('runs average 20-30 m, at least 3 m: %.1f, %.1f'):format(sum / total, minD))
+  local p1 = {id = 7} pedlogic.planRun(p1)
+  pedlogic.runSpeedScale, pedlogic.runDistanceScale = 2, 1.5
+  local p2 = {id = 7} pedlogic.planRun(p2)
+  pedlogic.runSpeedScale, pedlogic.runDistanceScale = 1, 1
+  check(math.abs(p2.runLeft - p1.runLeft * 1.5) < 1e-9 and math.abs(p2.runMult - p1.runMult * 2) < 1e-9, 'run sliders scale distance and speed')
+  -- the shortest runs are faster than any long one
+  check(fastShort > slowLong, ('short runs faster: %.2f vs %.2f'):format(fastShort, slowLong))
+  local straight = 0
+  for id = 1, 2000 do local p = {id = id} pedlogic.planRun(p) if p.runStraight then straight = straight + 1 end end
+  check(straight > 200 and straight < 400, ('now and then a run goes straight away from the car: %d of 2000'):format(straight))
 end
 
 -- a ped that calmed down gets a new path from where it stopped: the same for the same place and time

@@ -43,12 +43,16 @@ local function dump(H)
   return out
 end
 
+-- scared peds barely run here, so the car (driving dead straight, never steering at them) still hits some: these
+-- tests are about the kills being the same everywhere, not about how hard peds are to hit
+SLOW_RUN = {runSpeed = 0.1, runDistance = 0.5}
+
 local CAR_A_START = -800
 -- car A's drive: down the middle of the track at 22 m/s for 30 s, then stopped
 local function carA(t) local tt = math.min(t, 30) return 0, CAR_A_START + 22 * tt, t < 30 and 22 or 0 end
 
 if mode == 'solo' then
-  local H = require('tests/csp_mock')({dataDir = data})
+  local H = require('tests/csp_mock')({storage = SLOW_RUN, dataDir = data})
   H.makeCar(0, 500, 0, 0) H.makeCar(1, 500, 30, 0)  -- far off the track
   H.load(300)
   for _ = 1, 60 * 45 do H.frame() end
@@ -56,7 +60,7 @@ if mode == 'solo' then
 
 elseif mode == 'clientA' or mode == 'clientB' then
   local isA = mode == 'clientA'
-  local H = require('tests/csp_mock')({dataDir = data, online = true, sids = isA and {[0] = 0, [1] = 1} or {[0] = 1, [1] = 0}})
+  local H = require('tests/csp_mock')({storage = SLOW_RUN, dataDir = data, online = true, sids = isA and {[0] = 0, [1] = 1} or {[0] = 1, [1] = 0}})
   -- index 0 is always this client's own car
   local aIndex, bIndex = isA and 0 or 1, isA and 1 or 0
   H.makeCar(aIndex, 0, CAR_A_START, 0)
@@ -72,7 +76,7 @@ elseif mode == 'clientA' or mode == 'clientB' then
     H.sim.cameraPosition:set(isA and x or 500, 2, isA and z - 6 or -6)
     -- the other client says hello once it's running; A's messages reach B 100 ms after A sent them
     if not helloDone and H.state().simT then
-      H.deliver({kind = 'hello', data = {pedCount = 300, respawnSeconds = 120, version = 2}}, bIndex == 0 and aIndex or bIndex)
+      H.deliver({kind = 'hello', data = {pedCount = 300, respawnSeconds = 120, runSpeed = 10, runDistance = 50, version = 3}}, bIndex == 0 and aIndex or bIndex)
       helloDone = true
     end
     while inbox[nextMsg] and inbox[nextMsg].time + 0.1 <= H.time do
@@ -86,7 +90,7 @@ elseif mode == 'clientA' or mode == 'clientB' then
   print(('%s: %d messages sent, %d received'):format(mode, #H.outbox, nextMsg - 1))
 
 elseif mode == 'replay' then
-  local H = require('tests/csp_mock')({dataDir = data})
+  local H = require('tests/csp_mock')({storage = SLOW_RUN, dataDir = data})
   H.makeCar(0, 0, CAR_A_START, 0) H.makeCar(1, 500, 0, 0)
   H.load(300)
   local snaps, carTrack = {}, {}
@@ -139,7 +143,7 @@ elseif mode == 'replay' then
 elseif mode == 'replayfile' then
   -- a saved replay opened in a new session: nothing in memory, only what the replay recorded
   local saved = load(arg[3])
-  local H = require('tests/csp_mock')({dataDir = data})
+  local H = require('tests/csp_mock')({storage = SLOW_RUN, dataDir = data})
   H.makeCar(0, 0, CAR_A_START, 0) H.makeCar(1, 500, 0, 0)
   H.sim.isReplayActive = true
   H.load(300)

@@ -170,9 +170,22 @@ return function(opts)
   physics = {raycastTrack = function(pos, dir, len)
     assert(type(len) == 'number' and pos.x == pos.x, 'ray args')
     H.rays = (H.rays or 0) + 1
-    if dir.y < -0.99 then  -- flat ground at y = 0
-      if pos.y >= 0 and pos.y <= len then return pos.y end
-      return -1
+    -- flat ground at y = 0, and H.deck = {x0, x1, z0, z1, bottom, top}: a slab (a bridge) over part of it
+    local d = H.deck
+    local onDeck = d and pos.x >= d.x0 and pos.x <= d.x1 and pos.z >= d.z0 and pos.z <= d.z1
+    if dir.y < -0.99 then
+      local best = -1
+      for _, h in ipairs(onDeck and {0, d.bottom, d.top} or {0}) do
+        if h <= pos.y and pos.y - h <= len and (best == -1 or pos.y - h < best) then best = pos.y - h end
+      end
+      return best
+    end
+    if dir.y > 0.99 then
+      local best = -1
+      for _, h in ipairs(onDeck and {d.bottom, d.top} or {}) do
+        if h > pos.y and h - pos.y <= len and (best == -1 or h - pos.y < best) then best = h - pos.y end
+      end
+      return best
     end
     if H.walls and math.abs(dir.y) < 0.5 then return 0.2 end  -- a wall right next to everything
     return -1
@@ -215,7 +228,8 @@ return function(opts)
   -- ---- running ------------------------------------------------------------------------------------
   function H.load(pedCount)
     __dirname = opts.dataDir
-    storage.pedCount = pedCount or 400
+    storage.pedsPerKm = (pedCount or 400) / (sim.trackLengthM / 1000)  -- tests think in totals
+    for k, v in pairs(opts.storage or {}) do storage[k] = v end
     __carmapedsTest = {}
     dofile('carmapeds.lua')
   end

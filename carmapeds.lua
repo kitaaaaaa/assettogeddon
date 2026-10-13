@@ -9,8 +9,10 @@ local paths = require('src/paths')
 local events = require('src/events')
 
 local settings = ac.storage{
-  pedCount = 300,
+  pedsPerKm = 60,   -- pedestrians per km of track (a 5 km track: 300)
   respawnSeconds = 120,
+  runSpeed = 1,     -- scale on how fast scared peds run
+  runDistance = 1,  -- scale on how far they run
   volume = 1,
   brightness = 1,
   drawDistance = 300,
@@ -333,6 +335,19 @@ end
 -- client builds the same peds with the same ids, paths and schedules.
 local GRID_BEFORE, GRID_AFTER = 400, 50  -- m of track around the start line kept free (grid, pit exit)
 
+-- The map's extent (its static meshes), for maps without an AI line. nil if unknown.
+local mapBounds
+local function getMapBounds()
+  if mapBounds == nil then
+    mapBounds = false
+    local ok, mn, mx, n = pcall(function() return ac.findNodes('trackRoot:yes'):getStaticAABB() end)
+    if ok and n and n > 0 and mx.x - mn.x > 10 and mx.z - mn.z > 10 and mx.x - mn.x < 1e6 and mx.z - mn.z < 1e6 then
+      mapBounds = {min = mn, max = mx}
+    end
+  end
+  return mapBounds or nil
+end
+
 local hasSpline
 local function splineAvailable()
   if hasSpline == nil then
@@ -349,6 +364,23 @@ local function standable(x, y, z)
     if not gy or math.abs(gy - y) > 0.6 then return false end
   end
   return true
+end
+
+-- Every surface stacked at (x, z) between top and top - depth, top first: a road in a tunnel under a hill or
+-- a bridge as well as the one on top. Only those with 2 m of headroom count (the underside of a bridge deck or
+-- a slab has none).
+local HEADROOM = 2
+local function layersAt(x, top, z, depth)
+  local out, y, bottom = {}, top, top - depth
+  for _ = 1, 8 do
+    if y <= bottom then break end
+    local d = ray(x, y, z, 0, -1, 0, y - bottom)
+    if d == -1 then break end
+    local gy = y - d
+    if ray(x, gy + 0.1, z, 0, 1, 0, HEADROOM) == -1 then out[#out + 1] = gy end
+    y = gy - 0.05
+  end
+  return out
 end
 
 -- A random spot from the seeded generator r: half on the track (and just beside it), half anywhere on the
@@ -370,11 +402,26 @@ local function randomSpot(r)
         local margin = onTrack and 2 or OFF_TRACK
         local lateral = -(s.y + margin) + (s.x + s.y + 2 * margin) * r()
         local x, z = c.x + side.x * lateral, c.z + side.z * lateral
-        local gy = pedlogic.groundBelow(ray, x, c.y + 30, z, 100)
+        local layers = layersAt(x, c.y + 30, z, 100)
+        local gy
+        if onTrack then
+          -- the layer the racing line is on (in a tunnel: the tunnel's road, not the hill above it)
+          for _, ly in ipairs(layers) do if not gy or math.abs(ly - c.y) < math.abs(gy - c.y) then gy = ly end end
+        elseif #layers > 0 then
+          gy = layers[1 + math.floor(r() * #layers)]
+        end
         if gy and (onTrack or standable(x, gy, z)) then return x, gy, z, fwd.x, fwd.z end
       end
+    elseif getMapBounds() then
+      -- no AI line: anywhere on the map, on any layer with headroom and flat enough
+      local b = getMapBounds()
+      local x = b.min.x + (b.max.x - b.min.x) * r()
+      local z = b.min.z + (b.max.z - b.min.z) * r()
+      local layers = layersAt(x, b.max.y + 5, z, b.max.y - b.min.y + 10)
+      local gy = #layers > 0 and layers[1 + math.floor(r() * #layers)] or nil
+      if gy and standable(x, gy, z) then return x, gy, z, 0, 1 end
     else
-      -- no AI spline: around the track's origin (still the same for everyone)
+      -- no AI line and no map extent: around the track's origin (still the same for everyone)
       local a, d = r() * math.pi * 2, 20 + r() * 300
       local x, z = math.sin(a) * d, math.cos(a) * d
       local gy = pedlogic.groundBelow(ray, x, 300, z, 600)
@@ -511,7 +558,7 @@ local sessionIndex
 local online = sim.isOnlineRace
 local mySid = 0
 local presence = {}        -- session id -> os.preciseClock() of its last hello
-local hostSettings = nil   -- {pedCount, respawnSeconds} from the host, when it isn't us
+local hostSettings = nil   -- {pedCount, respawnSeconds, runSpeed, runDistance} from the host, when it isn't us
 
 local function carSid(i)
   local car = ac.getCar(i)
@@ -533,8 +580,23 @@ local function decidesFor(sid)
   return amHost()
 end
 
-local function effectivePedCount() return hostSettings and hostSettings.pedCount or settings.pedCount end
+-- Peds scale with the map: per km of AI line, or for maps without one, per km of the map's width plus depth.
+local MIN_PEDS, MAX_PEDS = 10, 4000
+local function trackKm()
+  if splineAvailable() and sim.trackLengthM > 0 then return sim.trackLengthM / 1000 end
+  local b = getMapBounds()
+  if b then return ((b.max.x - b.min.x) + (b.max.z - b.min.z)) / 1000 end
+  return 5
+end
+local function ownPedCount()
+  return math.max(MIN_PEDS, math.min(MAX_PEDS, math.floor(settings.pedsPerKm * trackKm() + 0.5)))
+end
+local function effectivePedCount() return hostSettings and hostSettings.pedCount or ownPedCount() end
 local function effectiveRespawn() return hostSettings and hostSettings.respawnSeconds or settings.respawnSeconds end
+local function effectiveRun()
+  if hostSettings then return hostSettings.runSpeed, hostSettings.runDistance end
+  return settings.runSpeed, settings.runDistance
+end
 
 -- ---------------------------------------------------------------------------------------------
 -- Scores per car session id, from the events (so everyone, and every replay, counts the same).
@@ -655,7 +717,9 @@ local function sayHello(force)
   local now = os.preciseClock()
   if not force and now - lastHello < 5 then return end
   lastHello = now
-  sendHello({pedCount = settings.pedCount, respawnSeconds = settings.respawnSeconds, version = 2}, true)
+  sendHello({pedCount = ownPedCount(), respawnSeconds = settings.respawnSeconds,
+    runSpeed = math.floor(settings.runSpeed * 100 + 0.5), runDistance = math.floor(settings.runDistance * 100 + 0.5),
+    version = 3}, true)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -971,15 +1035,19 @@ function script.update(dt)
           if msg.kind[i] ~= 0 then receive(events.read(msg, i)) end
         end
       end)
-    sendHello = ac.OnlineEvent({ac.StructItem.key('carmapeds.hello.v1'), pedCount = ac.StructItem.uint16(),
-      respawnSeconds = ac.StructItem.uint16(), version = ac.StructItem.uint16()}, function(sender, msg)
+    sendHello = ac.OnlineEvent({ac.StructItem.key('carmapeds.hello.v2'), pedCount = ac.StructItem.uint16(),
+      respawnSeconds = ac.StructItem.uint16(), runSpeed = ac.StructItem.uint16(), runDistance = ac.StructItem.uint16(),
+      version = ac.StructItem.uint16()}, function(sender, msg)
         if not sender or sender.index == 0 then return end
         presence[sender.sessionID] = os.preciseClock()
-        -- the host's ped count and respawn time apply to everyone (ped ids must match)
+        -- the host's ped count, respawn time and running apply to everyone (ped ids must match)
         if sender.sessionID < mySid then
           local host = true
           for sid in pairs(presence) do if present(sid) and sid < sender.sessionID then host = false end end
-          if host then hostSettings = {pedCount = msg.pedCount, respawnSeconds = msg.respawnSeconds} end
+          if host then
+            hostSettings = {pedCount = msg.pedCount, respawnSeconds = msg.respawnSeconds,
+              runSpeed = msg.runSpeed / 100, runDistance = msg.runDistance / 100}
+          end
         end
       end)
     sayHello(true)
@@ -987,6 +1055,7 @@ function script.update(dt)
   sayHello(false)
   if hostSettings and amHost() then hostSettings = nil end
   if effectivePedCount() ~= populatedCount then startPopulating() return end
+  pedlogic.runSpeedScale, pedlogic.runDistanceScale = effectiveRun()
 
   -- the clock
   replaying = sim.isReplayActive
@@ -1285,10 +1354,14 @@ function script.windowSettings(dt)
     if v ~= settings[key] then settings[key] = v end
   end
   if hostSettings then
-    ui.textWrapped(('Pedestrians and respawn time come from the host: %d, %d s.'):format(hostSettings.pedCount, hostSettings.respawnSeconds))
+    ui.textWrapped(('Pedestrians, respawn time and running come from the host: %d, %d s, speed %d%%, distance %d%%.')
+      :format(hostSettings.pedCount, hostSettings.respawnSeconds, hostSettings.runSpeed * 100, hostSettings.runDistance * 100))
   else
-    slider('pedCount', 'Pedestrians: %.0f', 10, 1000, 1, true)
+    slider('pedsPerKm', 'Pedestrians per km: %.0f', 5, 200, 1, true)
+    ui.textWrapped(('%d on this track (%.1f km; at most %d)'):format(ownPedCount(), trackKm(), MAX_PEDS))
     slider('respawnSeconds', 'Respawn dead after: %.0f s (0 = never)', 0, 600, 1, true)
+    slider('runSpeed', 'Scared peds run speed: %.0f%%', 50, 200, 100)
+    slider('runDistance', 'Scared peds run distance: %.0f%%', 50, 300, 100)
   end
   slider('drawDistance', 'Draw distance: %.0f m', 50, 1000, 1)
   slider('volume', 'Volume: %.0f%%', 0, 100, 100)

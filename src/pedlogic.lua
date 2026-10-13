@@ -102,6 +102,7 @@ function M.settleHere(ped, x, y, z, t, ray)
   ped.anchor = {t0 = math.floor(t), s0 = 0, dir0 = 1}
   ped.s, ped.pathDir = 0, 1
   ped.scared, ped.calmSince, ped.fleeX, ped.fleeZ = false, nil, nil, nil
+  ped.runLeft, ped.fleeSide = 0, nil
   M.placeOnPath(ped)
 end
 
@@ -116,7 +117,7 @@ end
 function M.respawn(ped, now)
   local d = ped.def
   ped.path = ped.homePath or ped.path
-  ped.fleeX, ped.fleeZ = nil, nil
+  ped.fleeX, ped.fleeZ, ped.runLeft, ped.fleeSide = nil, nil, 0, nil
   ped.s, ped.pathDir = ped.initialS, ped.initialDir
   ped.anchor = {t0 = now, s0 = ped.initialS, dir0 = ped.initialDir}
   ped.scared, ped.calmSince = false, nil
@@ -342,6 +343,23 @@ local function wallAhead(ray, ped, dx, dz, dist)
   return ray(ped.x, ped.y + 0.4, ped.z, dx / l, 0, dz / l, dist) ~= -1
 end
 
+-- Each scare gets a run: how far (m) and how fast. Most runs are long (12-40 m), about 1 in 6 short (3-8 m);
+-- the shorter the run, the faster (up to 1.6x), and every run gets a base boost over C1's speeds. Both scale with
+-- the settings. Most runs go sideways off the car's line; some (STRAIGHT_RUN_CHANCE) straight away from the car.
+-- The numbers come from a generator seeded by the ped and its scare count, not the shared one.
+M.runSpeedScale, M.runDistanceScale = 1, 1
+local RUN_BOOST, SHORT_RUN_CHANCE, SHORT_BOOST, STRAIGHT_RUN_CHANCE = 1.2, 0.15, 0.6, 0.15
+local function planRun(ped)
+  ped.scareCount = (ped.scareCount or 0) + 1
+  local r = rng.new(rng.hash(ped.id .. ':run:' .. ped.scareCount))
+  local d = r() < SHORT_RUN_CHANCE and 3 + 5 * r() or 12 + 28 * r()
+  ped.runLeft = d * M.runDistanceScale
+  ped.runMult = (1 + SHORT_BOOST * math.max(0, 1 - (d - 3) / 37)) * RUN_BOOST * M.runSpeedScale
+  ped.runStraight = r() < STRAIGHT_RUN_CHANCE
+  ped.fleeSide = nil
+end
+M.planRun = planRun
+
 -- directions a fleeing ped tries, in order: straight on, then turning further and further (radians)
 local FLEE_TURNS = {0, math.pi / 4, -math.pi / 4, math.pi / 2, -math.pi / 2, 3 * math.pi / 4, -3 * math.pi / 4}
 
@@ -357,12 +375,28 @@ function M.mungePath(ped, danger, dX, dZ, dtMs, ray, now)
       if ped.speed > terminal then ped.speed = terminal end
       -- not C1 (which runs them along their path, short ones here, so they got stuck turning back at its ends):
       -- straight away from the danger, round walls, kerbs and drops
-      if danger ~= 0 then
+      -- sideways off the line the car is travelling along, to the side the ped is already on (the way it first
+      -- went, for the whole run, so it doesn't dither when the car swerves)
+      local car = ped.frightener
+      if car and ped.runStraight then
+        -- now and then: straight away from the car
         local l = math.sqrt(dX * dX + dZ * dZ)
         if l > 0 then ped.fleeX, ped.fleeZ = -dX / l, -dZ / l end
+      elseif car then
+        local v = math.sqrt((car.vx or 0) ^ 2 + (car.vz or 0) ^ 2)
+        local hx, hz = car.dirX or 0, car.dirZ or 1
+        if v > 1 then hx, hz = car.vx / v, car.vz / v end
+        local rx, rz = hz, -hx  -- right of the car's travel
+        if not ped.fleeSide then
+          local lat = (ped.x - car.x) * rx + (ped.z - car.z) * rz
+          if math.abs(lat) < 0.3 then lat = ped.id % 2 == 0 and 1 or -1 end
+          ped.fleeSide = lat > 0 and 1 or -1
+        end
+        ped.fleeX, ped.fleeZ = rx * ped.fleeSide, rz * ped.fleeSide
       end
       if not ped.fleeX then ped.fleeX, ped.fleeZ = ped.dirX, ped.dirZ end
-      local step = dtMs * ped.speed * U
+      local step = (ped.runLeft or 0) > 0 and dtMs * ped.speed * U * (ped.runMult or 1) or 0
+      ped.runLeft = (ped.runLeft or 0) - step  -- used up even when blocked, so a cornered ped doesn't run forever
       if step > 0 then
         local fx, fz = ped.fleeX, ped.fleeZ
         for _, turn in ipairs(FLEE_TURNS) do
@@ -695,11 +729,16 @@ function M.update(ped, ctx)
         if a.dangerLevel > 0 and a.dangerLevel < 999 and a.dangerLevel <= danger then
           ped.scared, ped.calmSince = true, nil
           ped.lastActionChange = now - 1e9  -- no reaction-time wait for the first reaction
+          planRun(ped)
+          ped.runDanger = danger
           break
         end
       end
     end
     if ped.scared then
+      -- run finished but still in danger: another run; danger gone: run on to the end of this one
+      if (ped.runLeft or 0) <= 0 and danger > 0 then planRun(ped) ped.runDanger = danger end
+      if danger == 0 and (ped.runLeft or 0) > 0 then danger = ped.runDanger or 0 end
       changed = M.mungeAction(ped, danger, now)
       if ped.frightener then ped.scaredBy = ped.frightener.sid end
       -- calm again (danger gone, doing a calm action) for 3 s: back on a schedule, anchored here

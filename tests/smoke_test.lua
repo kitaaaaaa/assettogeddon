@@ -9,6 +9,8 @@ local function check(cond, msg) if not cond then failures = failures + 1 print('
 local c1data = require('src/c1data')
 c1data.GRID_GIRL.signSequence, c1data.GRID_GIRL.standSequence = 1, 0  -- the fake ped has 3 sequences
 local H = require('tests/csp_mock')({dataDir = fakeRoot})
+-- a bridge 7-8 m up over part of the track (z -700..-500), with a road (the track) running under it
+H.deck = {x0 = -200, x1 = 200, z0 = -700, z1 = -500, bottom = 7, top = 8}
 H.makeCar(0, 0, -900, 0)
 H.makeCar(1, 3, -950, 0)
 H.load(400)
@@ -109,6 +111,26 @@ for _, p in ipairs(st.peds) do
 end
 check(off > total * 0.3 and off < total * 0.6, ('peds off the track: %d of %d'):format(off, total))
 check(tooFar == 0, 'no ped further than 150 m from the track: ' .. tooFar)
+
+-- stacked surfaces (the bridge): on-track peds under it are on the road below (the racing line's level), off-track
+-- ones on either layer, none on the bridge's underside
+local under, onTop, underside, onTrackTop = 0, 0, 0, 0
+for _, p in ipairs(st.peds) do
+  local hp = p.homePath
+  if not p.gridGirl and not p.flagman and hp.z[1] >= -700 and hp.z[1] <= -500 and math.abs(hp.x[1]) <= 200 then
+    local y = hp.y[1]
+    if math.abs(y) < 0.01 then under = under + 1 elseif math.abs(y - 8) < 0.01 then onTop = onTop + 1
+    else underside = underside + 1 end
+    if math.abs(hp.x[1]) <= 8 and math.abs(y - 8) < 0.01 then onTrackTop = onTrackTop + 1 end
+  end
+end
+check(under > 0 and onTop > 0, ('peds on both layers where surfaces stack: %d under, %d on top'):format(under, onTop))
+check(underside == 0, 'no ped on a surface without headroom: ' .. underside)
+check(onTrackTop == 0, 'on-track peds use the racing line\'s layer: ' .. onTrackTop .. ' on top')
+-- peds scale with the track: 400 for this 2 km track (200 per km), plus the flagman and grid girls
+local randomPeds = 0
+for _, p in ipairs(st.peds) do if not p.gridGirl and not p.flagman then randomPeds = randomPeds + 1 end end
+check(randomPeds > 380 and randomPeds <= 400, 'ped count from peds per km x track length: ' .. randomPeds)
 
 -- grid girls: beside every second grid slot (slots 0, 2, 4, 6, 8: the x = -2 column), on its outer side
 -- (x = -4.4), never among the random peds
