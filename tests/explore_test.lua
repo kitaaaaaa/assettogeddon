@@ -136,6 +136,16 @@ do
   check(roofs == 0, 'city grid: never on a roof: ' .. roofs)
 end
 
+-- a 20 x 20 km map of open drivable ground whose extent is unknown (bounds nil), the spawn in the middle: with
+-- 12000 points it still spreads out most of the way to the edges, not just around the start
+do
+  local open = world(function(x, z) return math.abs(x) < 10000 and math.abs(z) < 10000 end)
+  local pts = explore.run(rng.new(8), open, {{x = 0, y = 0, z = 0}}, nil, 12000)
+  local far = 0
+  for _, n in ipairs(pts) do far = math.max(far, math.sqrt(n.x * n.x + n.z * n.z)) end
+  check(far > 7000, ('unknown extent: spreads out (farthest %.1f km from the start, the edge is 10)'):format(far / 1000))
+end
+
 -- the same inputs give the same points (every client builds the same peds)
 local a = explore.run(rng.new(3), roads, {{x = 0, y = 0, z = 0}}, bounds, 300)
 local b = explore.run(rng.new(3), roads, {{x = 0, y = 0, z = 0}}, bounds, 300)

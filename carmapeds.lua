@@ -504,12 +504,7 @@ local function exploreTask()
     local gy = pedlogic.groundBelow(ray, 0, 500, 0, 1000)
     if gy then seeds[1] = {x = 0, y = gy, z = 0} end
   end
-  local bounds = getMapBounds()
-  if not bounds and seeds[1] then
-    local s = seeds[1]
-    bounds = {min = {x = s.x - 3000, z = s.z - 3000}, max = {x = s.x + 3000, z = s.z + 3000}}
-  end
-  if not bounds then return {} end
+  local bounds = getMapBounds()  -- may be unknown: exploration then aims beyond what it has found so far
   local r = rng.new(rng.hash(ac.getTrackFullID('/') .. ':explore'))
   return explore.run(r, ray, seeds, bounds, EXPLORE_MAX, coroutine.yield)
 end
@@ -1054,7 +1049,7 @@ local function describePlacement()
     local b = getMapBounds()
     parts[#parts + 1] = ('No AI line: explored %d points (%.1f km of ground), reaching %.1f km from the start%s.')
       :format(explored and #explored or 0, trackKm(), reach / 1000,
-        b and (' (map %.1f x %.1f km)'):format((b.max.x - b.min.x) / 1000, (b.max.z - b.min.z) / 1000) or '')
+        b and (' (map %.1f x %.1f km)'):format((b.max.x - b.min.x) / 1000, (b.max.z - b.min.z) / 1000) or ' (map size unknown)')
     local st = explore.lastStats
     if st then
       local why = {}

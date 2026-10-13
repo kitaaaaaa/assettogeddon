@@ -9,6 +9,9 @@ local M = {}
 
 M.STEP = 10       -- m between points
 M.MIN_GAP = 8     -- m: no point closer than this to another
+M.REACH = 2000    -- m: targets are aimed this far beyond the ground found so far
+M.AIM, M.FOLLOW = 0.75, 0.2 -- shares of steps aimed at far targets (spreading out) and carrying on (following
+                            -- roads); the rest fill in around a random point
 M.CLIMB = 3       -- m of height change allowed over a step
 M.HEADROOM = 2    -- m of free space above the ground
 M.WALL_HEIGHT = 1.2
@@ -54,7 +57,7 @@ for _, deg in ipairs({20, 40, 60, 90}) do
 end
 
 -- rand: [0, 1) generator; seeds: {{x, y, z}} points on the ground (car spawn points); bounds: {min, max} (vec3s
--- or tables with x, z) to aim at; maxNodes: how many points at most; yield: called now and then (coroutine).
+-- or tables with x, z) to aim at, or nil if unknown; maxNodes: how many points at most; yield: called now and then (coroutine).
 -- Returns the points: {x, y, z, fx, fz} with (fx, fz) the direction it was reached in.
 function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
   yield = yield or function() end
@@ -103,8 +106,20 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
     if not crowded(s.x, s.z) then add({x = s.x, y = s.y, z = s.z, fx = 0, fz = 1}) end
   end
   if #nodes == 0 then return nodes end
-  local x0, x1 = bounds.min.x, bounds.max.x
-  local z0, z1 = bounds.min.z, bounds.max.z
+  -- where targets are aimed: the map's extent if known, and always REACH beyond the ground found so far (so
+  -- it keeps pushing outwards even when the extent is unknown or wrong)
+  local ex0, ex1, ez0, ez1 = math.huge, -math.huge, math.huge, -math.huge
+  for _, q in ipairs(nodes) do
+    ex0, ex1, ez0, ez1 = math.min(ex0, q.x), math.max(ex1, q.x), math.min(ez0, q.z), math.max(ez1, q.z)
+  end
+  local function targetBox()
+    local x0, x1, z0, z1 = ex0 - M.REACH, ex1 + M.REACH, ez0 - M.REACH, ez1 + M.REACH
+    if bounds then
+      x0, x1 = math.min(x0, bounds.min.x), math.max(x1, bounds.max.x)
+      z0, z1 = math.min(z0, bounds.min.z), math.max(z1, bounds.max.z)
+    end
+    return x0, x1, z0, z1
+  end
   local attempts, fails = 0, 0
   while #nodes < maxNodes and #active > 0 and fails < M.MAX_STREAK and attempts < maxNodes * M.TRIES_PER_NODE
       and rays < M.MAX_RAYS do
@@ -112,9 +127,19 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
     if attempts % M.ATTEMPTS_PER_YIELD == 0 then yield() end
     local n, dx, dz
     local r = rand()
-    if r < 0.45 then
+    if r < M.AIM then
       -- towards a random target: the nearest active point grows (spreads the tree across the map)
-      local tx, tz = x0 + (x1 - x0) * rand(), z0 + (z1 - z0) * rand()
+      local x0, x1, z0, z1 = targetBox()
+      local tx, tz
+      if rand() < 0.5 then
+        tx, tz = x0 + (x1 - x0) * rand(), z0 + (z1 - z0) * rand()
+      else
+        -- out past the explored edge in a random direction: the outermost point that way grows (pushes outwards)
+        local cx, cz = (ex0 + ex1) / 2, (ez0 + ez1) / 2
+        local rad = math.sqrt((ex1 - ex0) ^ 2 + (ez1 - ez0) ^ 2) / 2 + M.REACH
+        local a = rand() * math.pi * 2
+        tx, tz = cx + math.sin(a) * rad, cz + math.cos(a) * rad
+      end
       local best = math.huge
       for _, q in ipairs(active) do
         local d = (q.x - tx) ^ 2 + (q.z - tz) ^ 2
@@ -122,7 +147,7 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
       end
       local l = math.sqrt(best)
       if l > 0 then dx, dz = (tx - n.x) / l, (tz - n.z) / l end
-    elseif r < 0.9 then
+    elseif r < M.AIM + M.FOLLOW then
       -- following on: an active point carries on the way it was reached, give or take 30 degrees (follows roads)
       n = active[1 + math.floor(rand() * #active)]
       local a = math.atan2(n.fx, n.fz) + (rand() - 0.5) * math.pi / 3
@@ -163,6 +188,7 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
         end
         if nx then
           add({x = nx, y = ny, z = nz, fx = ux, fz = uz})
+          ex0, ex1, ez0, ez1 = math.min(ex0, nx), math.max(ex1, nx), math.min(ez0, nz), math.max(ez1, nz)
           added = true
           break
         end
