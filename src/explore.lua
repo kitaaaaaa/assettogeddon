@@ -1,5 +1,5 @@
 -- Finding the drivable ground of a map without an AI line (free-roam maps, conversions). Starting from the
--- car spawn points, it grows a tree of points over connected ground in 10 m steps (a rapidly-exploring random
+-- car spawn points, it grows a tree of points over connected ground in 20 m steps, 10 m where that fails (a rapidly-exploring random
 -- tree: it extends the point nearest to a random target, so it spreads out evenly): each step needs ground
 -- within a 3 m climb or drop, no wall in the way, ground halfway too (no jumping gaps) and 2 m of headroom.
 -- A blocked step turns up to 90 degrees either way, and half the steps carry on the way their point was reached,
@@ -7,12 +7,12 @@
 -- Pure Lua: the raycast is passed in. ray(x, y, z, dx, dy, dz, len) -> distance or -1.
 local M = {}
 
-M.STEP = 10       -- m between points
-M.MIN_GAP = 8     -- m: no point closer than this to another
+M.STEP = 20       -- m between points
+M.MIN_GAP = 16    -- m: no point closer than this to another
 M.REACH = 2000    -- m: targets are aimed this far beyond the ground found so far
 M.AIM, M.FOLLOW = 0.75, 0.2 -- shares of steps aimed at far targets (spreading out) and carrying on (following
                             -- roads); the rest fill in around a random point
-M.CLIMB = 3       -- m of height change allowed over a step
+M.CLIMB = 6       -- m of height change allowed over a step (30%)
 M.HEADROOM = 2    -- m of free space above the ground
 M.WALL_HEIGHT = 1.2
 M.RAYS_PER_YIELD = 1000 -- raycasts between yields: the cost per frame while loading (a few ms)
@@ -29,14 +29,13 @@ local function ground(ray, x, fromY, z, depth)
   return fromY - d
 end
 
--- One step from point n in direction (dx, dz): the new point's x, y, z, or nil. The wall check runs parallel to
+-- One step of len m from point n in direction (dx, dz): the new point's x, y, z, or nil and why not. The wall check runs parallel to
 -- the ground (from 1.2 m above this point to 1.2 m above the next), so a climbing road isn't taken for a wall.
 -- why steps failed, for the summary (M.lastStats.rejected)
 local rejected = {}
-local function reject(why) rejected[why] = (rejected[why] or 0) + 1 return nil end
+local function reject(why) rejected[why] = (rejected[why] or 0) + 1 return nil, why end
 
-local function step(ray, n, dx, dz)
-  local len = M.STEP
+local function step(ray, n, dx, dz, len)
   local x, z = n.x + dx * len, n.z + dz * len
   local y = ground(ray, x, n.y + M.CLIMB, z, M.CLIMB * 2)
   if not y then return reject('no ground') end
@@ -44,12 +43,16 @@ local function step(ray, n, dx, dz)
   local dist = math.sqrt(len * len + rise * rise)
   if ray(n.x, n.y + M.WALL_HEIGHT, n.z, dx * len / dist, rise / dist, dz * len / dist, dist) ~= -1 then return reject('wall') end
   if ray(x, y + 0.1, z, 0, 1, 0, M.HEADROOM) ~= -1 then return reject('no headroom') end
+  -- solid ground a third and two thirds of the way along (no jumping gaps)
   local top = math.max(n.y, y) + M.CLIMB
-  if not ground(ray, n.x + dx * len / 2, top, n.z + dz * len / 2, M.CLIMB * 2 + math.abs(rise)) then return reject('gap') end
+  for _, f in ipairs({1 / 3, 2 / 3}) do
+    if not ground(ray, n.x + dx * len * f, top, n.z + dz * len * f, M.CLIMB * 2 + math.abs(rise)) then return reject('gap') end
+  end
   return x, y, z
 end
 
-local SECTORS = 16
+local SECTORS = 64
+local LENGTHS = {M.STEP, M.STEP / 2}
 local TURNS = {0}
 for _, deg in ipairs({20, 40, 60, 90}) do
   TURNS[#TURNS + 1] = math.rad(deg)
@@ -71,12 +74,13 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
   local nodes, grid = {}, {}
   local G = M.MIN_GAP
   local function key(cx, cz) return cx * 1000003 + cz end
-  local function crowded(x, z)
+  -- a point (other than `except`) closer than MIN_GAP to (x, z), or nil
+  local function crowded(x, z, except)
     local cx, cz = math.floor(x / G), math.floor(z / G)
     for i = cx - 1, cx + 1 do
       for j = cz - 1, cz + 1 do
         for _, n in ipairs(grid[key(i, j)] or {}) do
-          if (n.x - x) ^ 2 + (n.z - z) ^ 2 < G * G then return n end
+          if n ~= except and (n.x - x) ^ 2 + (n.z - z) ^ 2 < G * G then return n end
         end
       end
     end
@@ -170,20 +174,28 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
         for _, turn in ipairs(TURNS) do
           local c, sn = math.cos(turn), math.sin(turn)
           local vx, vz = dx * c - dz * sn, dx * sn + dz * c
-          local near = crowded(cur.x + vx * M.STEP, cur.z + vz * M.STEP)
+          local near = crowded(cur.x + vx * M.STEP, cur.z + vz * M.STEP, cur)
           if near then
             -- explored that way (the nearest turn from straight on): walk on through it, no raycasts
-            if near ~= cur then hopTo = near break end
+            hopTo = near
+            break
           else
-            -- each point remembers the directions (16 sectors) found blocked from it, so walks along a fence
-            -- don't raycast into it again and again
+            -- a full step, else half of one (through a gate, onto a narrow road: tight places get closer points).
+            -- Each point remembers the directions (64 sectors, per step length) found blocked from it, so walks
+            -- along a fence or a road edge don't raycast the same way again and again; the sectors are narrow so
+            -- a long step's end only moves about a metre within one (a narrow road isn't written off by a near miss)
             local sector = math.floor((math.atan2(vx, vz) / (2 * math.pi) + 1) * SECTORS + 0.5) % SECTORS
             cur.blocked = cur.blocked or {}
-            if not cur.blocked[sector] then
-              nx, ny, nz = step(ray, cur, vx, vz)
-              if nx then ux, uz = vx, vz break end
-              cur.blocked[sector] = true
+            for li, len in ipairs(LENGTHS) do
+              local k = li * SECTORS + sector
+              if not cur.blocked[k] then
+                if len < M.STEP and crowded(cur.x + vx * len, cur.z + vz * len, cur) then break end
+                local x, y, z = step(ray, cur, vx, vz, len)
+                if x then nx, ny, nz, ux, uz = x, y, z, vx, vz break end
+                cur.blocked[k] = true
+              end
             end
+            if nx then break end
           end
         end
         if nx then

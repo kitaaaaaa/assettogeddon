@@ -23,9 +23,9 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   just beside it, half anywhere on the surfaces cars can touch (grass, run-off, verges...) within 150 m of it,
   where the ground is flat enough. Where surfaces are stacked (a road in a tunnel, under a bridge), peds go on
   every layer with at least 2 m of headroom; on-track ones on the racing line's own layer. Maps without an AI
-  line (free roam maps, conversions) are explored once at load: from the car spawn points, in 10 m steps over
-  connected ground (no walls in the way, at most a 3 m climb, 2 m of headroom), so peds go along the roads, car
-  parks and tunnels the cars can reach, never on roofs; counted per km explored (up to 120 km). Maps split into several .kn5 files are explored across all of them. Every
+  line (free roam maps, conversions) are explored once at load: from the car spawn points, in 20 m steps (10 m where that fails) over
+  connected ground (no walls in the way, at most a 30% climb, 2 m of headroom), so peds go along the roads, car
+  parks and tunnels the cars can reach, never on roofs; counted per km explored (up to 240 km). Maps split into several .kn5 files are explored across all of them. Every
   pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
   with the rest.  Placement comes from the track's name, so a track always gets the
   same layout. 

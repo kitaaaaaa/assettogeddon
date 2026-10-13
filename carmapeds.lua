@@ -429,8 +429,10 @@ local function randomSpot(r)
     elseif explored and #explored > 0 then
       -- no AI line: near a random point of the explored drivable ground
       local n = explored[1 + math.floor(r() * #explored)]
-      local x = n.x + (r() - 0.5) * explore.STEP
-      local z = n.z + (r() - 0.5) * explore.STEP
+      -- along the way the ground ran at that point (a road) up to half a step, and a little to the side
+      local along, across = (r() - 0.5) * explore.STEP, (r() - 0.5) * 4
+      local x = n.x + n.fx * along + n.fz * across
+      local z = n.z + n.fz * along - n.fx * across
       local gy = pedlogic.groundBelow(ray, x, n.y + 1.5, z, 3)
       if gy and ray(x, gy + 0.1, z, 0, 1, 0, HEADROOM) == -1 and standable(x, gy, z) then return x, gy, z, n.fx, n.fz end
     elseif getMapBounds() then

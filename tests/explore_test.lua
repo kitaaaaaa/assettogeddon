@@ -41,7 +41,7 @@ for _, n in ipairs(nodes) do
   if not ((math.abs(n.x) < 6 and math.abs(n.z) < 1000) or (math.abs(n.z) < 6 and math.abs(n.x) < 1000)) then off = off + 1 end
   far = math.max(far, math.abs(n.x), math.abs(n.z))
 end
-check(#nodes > 300, 'roads only: plenty of points along them: ' .. #nodes)
+check(#nodes > 150, 'roads only: plenty of points along them: ' .. #nodes)
 check(off == 0, 'roads only: every point on a road: ' .. off .. ' off')
 check(far > 900, ('roads only: reaches the far ends (%.0f m out)'):format(far))
 
@@ -53,7 +53,7 @@ for _, n in ipairs(nodes) do
   if n.y > 1 then onRoof = onRoof + 1 end
   if n.x > 20 and n.x < 60 and n.z > 20 and n.z < 60 then inside = inside + 1 end
 end
-check(#nodes > 1000, 'city: covers the ground: ' .. #nodes)
+check(#nodes > 600, 'city: covers the ground: ' .. #nodes)
 check(onRoof == 0 and inside == 0, ('city: never on the roof or inside the building (%d, %d)'):format(onRoof, inside))
 
 -- a 7 m wide road climbing steeply (up to 28%) for 3 km: the wall check follows the slope, so it gets to the top
