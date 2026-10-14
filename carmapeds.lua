@@ -23,6 +23,7 @@ local settings = ac.storage{
   pedsOff = false,  -- no peds at all (scoring, cunning stunts and reset costs still on)
   pedGroup = 'all', -- which ped types: 'all', or a group of C1's races (c1data.raceGroups) by its key
   robots = false,   -- the German version's robots (BORING.TXT), when the data has them
+  dataVersion = 'original', -- or 'uk' / 'german': DATA\UK or DATA\GERMAN's files before the original's
 }
 
 local U = pedlogic.U
@@ -75,7 +76,7 @@ local function startLoading()
       io_.lastError = why
       return nil
     end
-    local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots})
+    local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots, version = settings.dataVersion})
     if not d then
       if not io.fileExists(__dirname .. '/DATA/PEDESTRN.TXT') and not io.fileExists(__dirname .. '/DATA/BORING.TXT') then
         err = 'Copy the DATA folder from your Carmageddon 1 install into this app\'s folder ('
@@ -175,7 +176,7 @@ local function preloadSounds()
   end
   for id in pairs(ids) do
     local s = data.sounds[id]
-    if s then audioFor(data.soundDir .. s.file) end
+    if s then audioFor(s.path or (data.soundDir .. s.file)) end
   end
 end
 
@@ -209,7 +210,7 @@ local function playSoundAt(id, x, y, z, important)
   if (sim.cameraPosition.x - x) ^ 2 + (sim.cameraPosition.z - z) ^ 2 > 150 * 150 then return nil end
   local now = realMs()
   if not important and now - lastScreamMs < SCREAM_GAP_MS then return nil end
-  local file = data.soundDir .. s.file
+  local file = s.path or (data.soundDir .. s.file)
   local a = audioFor(file)
   if not a then return nil end
   local n, busy = 0, {}
@@ -1550,7 +1551,19 @@ function script.windowSettings(dt)
       if ui.button('>##pedGroup') then settings.pedGroup = choices[at % #choices + 1].key end
       ui.sameLine()
       ui.textWrapped('Peds: ' .. choices[at].label)
-      if data and data.hasRobots then
+      -- which version of the game's data: the original, or the UK / German one kept beside it (reloads)
+      if data and #data.versions > 1 then
+        local at = 1
+        for i, v in ipairs(data.versions) do if v.key == data.version then at = i end end
+        local pick
+        if ui.button('<##dataVersion') then pick = data.versions[(at - 2) % #data.versions + 1] end
+        ui.sameLine()
+        if ui.button('>##dataVersion') then pick = data.versions[at % #data.versions + 1] end
+        ui.sameLine()
+        ui.textWrapped('Version: ' .. data.versions[at].label)
+        if pick then settings.dataVersion = pick.key startLoading() end
+      end
+      if data and data.hasRobots and data.version ~= 'german' then
         if ui.checkbox('Robots (the German version\'s BORING.TXT; reloads)', settings.robots) then
           settings.robots = not settings.robots
           startLoading()

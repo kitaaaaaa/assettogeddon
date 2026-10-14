@@ -175,10 +175,19 @@ function M.findDataDir(root, exists)
   return nil
 end
 
+-- Other versions of the game kept beside the original: a subfolder of DATA holding only the files that differ
+-- (the same layout: GENERAL.TXT, PEDESTRN.TXT or BORING.TXT, SOUND/, PIXELMAP/), read before the original's.
+M.VERSIONS = {
+  {key = 'original', label = 'Original'},
+  {key = 'uk', label = 'UK (zombies)', dir = 'UK'},
+  {key = 'german', label = 'German (robots)', dir = 'GERMAN', robots = true},
+}
+
 -- io: {read = function(path) -> string|nil, exists = function(path) -> bool, lastError = string (why the last
 -- read failed, optional)}; yield: optional, called now and
 -- then so a coroutine can spread the work over frames. Returns data or nil, error.
 -- opts.robots: the German version's robot peds (BORING.TXT, its G* gibs) where the data has them.
+-- opts.version: a key of M.VERSIONS; that version's folder's files are used before the original's.
 function M.load(root, io, yield, opts)
   yield = yield or function() end
   opts = opts or {}
@@ -186,6 +195,37 @@ function M.load(root, io, yield, opts)
   if not data then return nil, 'no DATA/PEDESTRN.TXT in "' .. tostring(root) .. '"' end
   local out = {dataDir = data, warnings = {}, notes = {}, images = {}}
   local function warn(s) out.warnings[#out.warnings + 1] = s end
+
+  -- the versions there are, and the chosen one's folder in front of the original's files
+  out.versions = {}
+  local chosen
+  for _, v in ipairs(M.VERSIONS) do
+    local here = not v.dir
+    if v.dir then
+      for _, f in ipairs({'GENERAL.TXT', 'PEDESTRN.TXT', 'BORING.TXT'}) do
+        if io.exists(data .. '/' .. v.dir .. '/' .. f) then here = true end
+      end
+    end
+    if here then
+      out.versions[#out.versions + 1] = v
+      if v.key == opts.version then chosen = v end
+    end
+  end
+  out.version = chosen and chosen.key or 'original'
+  local overlay = chosen and chosen.dir and (data .. '/' .. chosen.dir .. '/')
+  if overlay then
+    local base = io
+    local function over(p) return p:sub(1, #data + 1) == data .. '/' and overlay .. p:sub(#data + 2) or nil end
+    io = setmetatable({
+      exists = function(p) local o = over(p) return (o and base.exists(o)) or base.exists(p) end,
+      read = function(p)
+        local o = over(p)
+        if o and base.exists(o) then return base.read(o) end
+        return base.read(p)
+      end,
+    }, {__index = base})
+    if chosen.robots then opts.robots = true end
+  end
 
   local general = io.read(data .. '/GENERAL.TXT')
   out.method = c1text.detectMethod(general)
@@ -232,6 +272,11 @@ function M.load(root, io, yield, opts)
   out.sounds = soundTxt and soundbank.parse(soundTxt) or {}
   if not soundTxt then warn('no DATA/SOUND/SOUND.TXT: no sounds') end
   out.soundDir = data .. '/SOUND/'
+  -- each sound's file: the chosen version's own if it has one
+  for _, snd in pairs(out.sounds) do
+    local o = overlay and (overlay .. 'SOUND/' .. snd.file)
+    snd.path = (o and io.exists(o)) and o or (out.soundDir .. snd.file)
+  end
 
   local count = 0
   local function add(name, m)

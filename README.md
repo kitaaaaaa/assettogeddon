@@ -35,12 +35,14 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   with the arrows in the settings. The app reads which peds each race places from the race files
   (`DATA\RACES.TXT` and `DATA\RACES\*.TXT`), so each choice has the game's own mix: groups of races by their
   track file names (the game's environments), then each race on its own. Online, the host's choice applies.
-- **Other versions of Carmageddon**: the UK zombie version's data loads as it is (checked with its
-  `PEDESTRN.TXT` and `PIXELMAP` folder: 42 zombie ped types, a zombie cow and flagman; the grid girl and the robot
-  as in the original), and its blood trails come out green, from the colour of its splat sprites. Its text files
-  are encrypted with the other of C1's two ciphers; if the `GENERAL.TXT` alongside suggests the wrong one, the
-  other is tried. The German version's robots (`DATA\BORING.TXT`, and its `G*` gib sprites) can be switched on
-  in the settings when the data has them (not yet tried with that version's files).
+- **Other versions of Carmageddon**: the UK (zombies) and German (robots) versions can be kept beside the
+  original and switched in the settings ("Version", reloads). Put the files that differ in `DATA\UK` and
+  `DATA\GERMAN` (same layout: `GENERAL.TXT`, `PEDESTRN.TXT` or `BORING.TXT`, `SOUND\`, `PIXELMAP\`); they're
+  read before the original's. Checked with both versions' files: UK, 42 zombie ped types with green blood and
+  zombie voices (its WAVs are the zombie recordings under the normal names); German, 32 robot ped types (from
+  `BORING.TXT`), mechanical `G*` gibs and oily blood. A whole other version's `DATA` folder works too (UK as it is;
+  German with the "Robots" checkbox). Everyone online should use the same version (the ped types differ).
+  `tools\` has the scripts for replacing a ped's sprites with generated ones.
 - **Flagman and Grid girls**:  Like Carmageddon, there's one bonus scoring flagman ped, standing beside the track at the start/finish line,
  waving his flag from the start of the session. ped 19 (`RID.PIX`), the flagman's counterpart, is never placed at random. Up to 8 of her stand
   at the starting grid, beside every second grid slot on the outside (at the pit boxes if the track has no

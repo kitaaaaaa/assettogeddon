@@ -123,4 +123,11 @@ for size = 0, 3 do for _, n in ipairs(c1data.GIB_NAMES[size]) do write(P .. n, p
 -- one robot gib, a different colour
 write(P .. 'GSPLAT1.PIX', pixFile(16, 16, 200))
 for _, n in ipairs(c1data.BANNER_NAMES) do write(P .. n, pixFile(128, 24, 12)) end
+-- other versions beside it: DATA/UK with its own GENERAL.TXT and one sound file, DATA/GERMAN with BORING.TXT
+mkdir(D .. '/UK/SOUND')
+mkdir(D .. '/GERMAN')
+local function copy(a, b) local f = assert(io.open(a, 'rb')) local d = f:read('*a') f:close() write(b, d) end
+copy(D .. '/GENERAL.TXT', D .. '/UK/GENERAL.TXT')
+copy(D .. '/SOUND/S4000.WAV', D .. '/UK/SOUND/S4000.WAV')
+copy(D .. '/BORING.TXT', D .. '/GERMAN/BORING.TXT')
 print('fake C1 data written to ' .. root)

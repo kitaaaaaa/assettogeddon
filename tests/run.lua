@@ -217,6 +217,14 @@ if fake then
   end}
   local m = assert(c1data.load(fake, mixed))
   check(#m.peds == #d.peds, ('PEDESTRN.TXT in the other cipher: %d of %d peds'):format(#m.peds, #d.peds))
+  -- other versions in DATA/UK and DATA/GERMAN: offered, and the chosen one's files used first
+  check(#d.versions == 3 and d.version == 'original', 'versions offered: ' .. #d.versions)
+  check(d.sounds[4000].path:find('/DATA/SOUND/S4000.WAV', 1, true), 'original: its own sound')
+  local uk = assert(c1data.load(fake, fio, nil, {version = 'uk'}))
+  check(uk.version == 'uk' and uk.sounds[4000].path:find('/DATA/UK/SOUND/S4000.WAV', 1, true)
+    and uk.sounds[4001].path:find('/DATA/SOUND/S4001.WAV', 1, true), 'UK: its sound where it has one, else the original')
+  local de = assert(c1data.load(fake, fio, nil, {version = 'german'}))
+  check(de.version == 'german' and de.robots and de.pedFile == 'BORING.TXT', 'German: robots from its BORING.TXT')
   -- a race file without the ped section
   check(c1data.parseRacePeds('VERSION 6\r\nstuff\r\n') == nil, 'no ped section: nil')
 end
