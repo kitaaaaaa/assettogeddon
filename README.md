@@ -31,10 +31,12 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   Placement comes from the track's name, so a track always gets the same layout. The count includes the flagman
   and grid girls, who go last when it's turned down (with 9 on a track with 8 grid girls, they're the only
   ones). **No pedestrians** turns them all off; scoring stays on (cunning stunts, reset costs).
-- **Which pedestrians**: all the types in `DATA\PEDESTRN.TXT`, or those of a group of Carmageddon's races, chosen
-  with the arrows in the settings. The app reads which peds each race places from the race files
-  (`DATA\RACES.TXT` and `DATA\RACES\*.TXT`), so each choice has the game's own mix: groups of races by their
-  track file names (the game's environments), then each race on its own. Online, the host's choice applies.
+- **Which pedestrians**: all the types in `DATA\PEDESTRN.TXT`, or those of one of Carmageddon's environments,
+  chosen with the arrows in the settings: City (Bleak City), Coastal (Dusty Trails), Snow (Frosty Pass), Desert
+  (Devil's Canyon) or MagnaChem and the mines; or a single race. The app reads which peds each race places from
+  the race files (`DATA\RACES.TXT` and `DATA\RACES\*.TXT`), so each choice has the game's own mix. The hovering
+  robot (ped 32, RO1) is placed by no race (a leftover of the robot peds the `-robots` option switches to), so it
+  only comes with "All". Online, the host's choice applies.
 - **Other versions of Carmageddon**: the UK (zombies) and German (robots) versions can be kept beside the
   original and switched in the settings ("Version", reloads). Put the files that differ in `DATA\UK` and
   `DATA\GERMAN` (same layout: `GENERAL.TXT`, `PEDESTRN.TXT` or `BORING.TXT`, `SOUND\`, `PIXELMAP\`); they're

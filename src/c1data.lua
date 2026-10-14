@@ -114,17 +114,36 @@ function M.parseRacePeds(text, method)
   return refs
 end
 
--- Groups of races for choosing which ped types appear: races are grouped by their track file name up to the
--- first digit (the game's own naming of its environments' tracks); each race can be chosen on its own too.
+-- C1's environments, by their race files' names (RACES.TXT gives each race's location): Bleak City (CITY*),
+-- Dusty Trails (COAST*), Frosty Pass (ICE*), Devil's Canyon mining town (DEZRACE*), and MagnaChem's acid ocean
+-- reprocessor (INDUST*) with Devil's Canyon's mines (MINES*) together.
+M.ENVIRONMENTS = {
+  {key = 'city', label = 'City (Bleak City)', match = {'^CITY'}},
+  {key = 'coast', label = 'Coastal (Dusty Trails)', match = {'^COAST'}},
+  {key = 'snow', label = 'Snow (Frosty Pass)', match = {'^ICE'}},
+  {key = 'desert', label = 'Desert (Devil\'s Canyon)', match = {'^DEZ'}},
+  {key = 'industrial', label = 'MagnaChem and the mines', match = {'^INDUS', '^MINES'}},
+}
+local function environment(file)
+  file = (file or ''):upper()
+  for _, e in ipairs(M.ENVIRONMENTS) do
+    for _, m in ipairs(e.match) do if file:find(m) then return e end end
+  end
+  return nil
+end
+
+-- Groups of races for choosing which ped types appear: by C1 environment (other race files by their file name up
+-- to the first digit); each race can be chosen on its own too.
 -- races: {{name, file, refs}}; returns {{key, label, refs = {ref = true}}}.
 function M.raceGroups(races)
   local groups, byKey = {}, {}
   for _, race in ipairs(races) do
     if race.refs then
-      local prefix = (race.file or ''):upper():gsub('%..*$', ''):match('^(%a+)') or '?'
+      local env = environment(race.file)
+      local prefix = env and env.key or (race.file or ''):upper():gsub('%..*$', ''):match('^(%a+)') or '?'
       local g = byKey[prefix]
       if not g then
-        g = {key = 'group:' .. prefix, prefix = prefix, refs = {}, races = {}}
+        g = {key = 'group:' .. prefix, prefix = prefix, env = env, refs = {}, races = {}}
         byKey[prefix] = g
         groups[#groups + 1] = g
       end
@@ -132,11 +151,19 @@ function M.raceGroups(races)
       for ref in pairs(race.refs) do g.refs[ref] = true end
     end
   end
+  -- environments in their usual order, then any others
+  local order = {}
+  for i, e in ipairs(M.ENVIRONMENTS) do order[e.key] = i end
+  table.sort(groups, function(a, b)
+    local x, y = order[a.prefix] or 99, order[b.prefix] or 99
+    if x ~= y then return x < y end
+    return a.prefix < b.prefix
+  end)
   local out = {}
   if #groups > 1 then
     for _, g in ipairs(groups) do
-      g.label = ('%s tracks (%d race%s: %s)'):format(g.prefix, #g.races, #g.races == 1 and '' or 's',
-        table.concat(g.races, ', '))
+      g.label = ('%s: %d race%s'):format(g.env and g.env.label or (g.prefix .. ' tracks'), #g.races,
+        #g.races == 1 and '' or 's')
       out[#out + 1] = g
     end
   end

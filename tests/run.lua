@@ -225,6 +225,11 @@ if fake then
     and uk.sounds[4001].path:find('/DATA/SOUND/S4001.WAV', 1, true), 'UK: its sound where it has one, else the original')
   local de = assert(c1data.load(fake, fio, nil, {version = 'german'}))
   check(de.version == 'german' and de.robots and de.pedFile == 'BORING.TXT', 'German: robots from its BORING.TXT')
+  -- C1's environments from the race files' names; MagnaChem and the mines together
+  local env = c1data.raceGroups({{name = 'a', file = 'CITYA1.TXT', refs = {[1] = 1}}, {name = 'b', file = 'INDUSTA1.TXT', refs = {[9] = 1}},
+    {name = 'c', file = 'MINESB1.TXT', refs = {[10] = 1}}, {name = 'd', file = 'ICE.TXT', refs = {[26] = 1}}, {name = 'e', file = 'CITYB2.TXT', refs = {[2] = 1}}})
+  check(env[1].key == 'group:city' and env[1].refs[1] and env[1].refs[2] and #env[1].races == 2, 'city group: both city races')
+  check(env[2].key == 'group:snow' and env[3].key == 'group:industrial' and env[3].refs[9] and env[3].refs[10], 'snow, then MagnaChem with the mines')
   -- a race file without the ped section
   check(c1data.parseRacePeds('VERSION 6\r\nstuff\r\n') == nil, 'no ped section: nil')
 end
