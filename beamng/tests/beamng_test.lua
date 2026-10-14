@@ -96,7 +96,9 @@ function createObject(class)
   function o:setField(k, _, v) self.fields[k] = v end
   function o:registerObject(name) self.name = name if class == 'Material' then materialsMade[name] = self end end
   function o:setPosition() end
-  function o:createMesh(m) meshes[#meshes + 1] = m end
+  function o:createMesh(m) meshes[#meshes + 1] = m self.mesh = m end
+  function o:setPosRot(x, y, z, qx, qy, qz, qw) self.pos, self.rot = {x = x, y = y, z = z}, {qx, qy, qz, qw} end
+  function o:setScale(v) self.scl = v end
   function o:delete() self.deleted = true end
   o.obj = o
   created[#created + 1] = o
@@ -138,25 +140,35 @@ print(('placed after %d frames (%.1f s at 60 fps)'):format(frames, frames / 60))
 check(placed ~= nil, 'peds placed')
 -- drive the player's car up the road through the peds at 20 m/s for 40 s, the camera behind it
 local rays0, t0, meshes0 = rays, os.clock(), #meshes
-for _ = 1, 2400 do
+local meshesWhileDriving
+for frame = 1, 2400 do
+  if frame == 1200 then meshesWhileDriving = #meshes end
   player.pos = vec3(player.pos.x, player.pos.y + 20 * dt, 0.7)
   player.vel = vec3(0, 20, 0)
   camPos = vec3(0, player.pos.y - 10, 2)
   ext.onUpdate(dt, dt)
 end
-print(('while driving: %.1f raycasts and %.2f ms of Lua per frame, %.1f mesh rebuilds per s'):format((rays - rays0) / 2400,
-  (os.clock() - t0) * 1000 / 2400, (#meshes - meshes0) / 40))
+meshesWhileDriving = #meshes - meshesWhileDriving  -- made in the last 20 s
+print(('while driving: %.1f raycasts and %.2f ms of Lua per frame, %d sprite meshes made in the last 20 s'):format(
+  (rays - rays0) / 2400, (os.clock() - t0) * 1000 / 2400, meshesWhileDriving))
 local errors = 0
 for _, l in ipairs(logs) do if l:find('^E ') then errors = errors + 1 print('log: ' .. l) end end
 for _, l in ipairs(logs) do if l:find('explored') or l:find('placed') or l:find('pedestrians') then print('log: ' .. l) end end
 check(errors == 0, 'no errors logged')
-check(#meshes > 0, 'ped mesh built')
-local lastQuads, subs = 0, 0
-for _, lod in ipairs(meshes[#meshes]) do for _, sm in ipairs(lod) do subs = subs + 1 lastQuads = lastQuads + #sm.verts / 4 end end
+-- the sprites: one-quad meshes made once each and moved; the ones shown now
+local sprites, shownNow = {}, {}
+for _, o in ipairs(created) do
+  if o.class == 'ProceduralMesh' and o.mesh and not o.deleted then
+    sprites[#sprites + 1] = o
+    if not o.hidden and o.pos then shownNow[#shownNow + 1] = o end
+  end
+end
 local mats = 0
 for _ in pairs(materialsMade) do mats = mats + 1 end
-print(('mesh rebuilds %d, last one %d quads in %d submeshes, %d materials, %d sounds'):format(#meshes, lastQuads, subs, mats, #sounds))
-check(lastQuads > 0 and mats > 0, 'quads drawn with materials')
+print(('%d sprite objects made (%d meshes in all), %d shown now, %d materials, %d sounds'):format(#sprites, #meshes, #shownNow, mats, #sounds))
+check(#shownNow > 0 and mats > 0, 'sprites shown with materials')
+check(#meshes == #sprites, 'each sprite object\'s mesh made once')
+check(meshesWhileDriving < #sprites, ('sprites reused while driving (%d made then, %d in all)'):format(meshesWhileDriving, #sprites))
 check(#sounds > 0, 'sounds played')
 local dead = 0
 for _, p in ipairs(__carmapedsTest.state().peds) do if p.hitPoints < 0 then dead = dead + 1 end end
@@ -175,8 +187,8 @@ ext.onUpdate(dt, dt)
 check(__carmapedsTest.state().scores[0].credits == after, 'an unknown vehicle\'s reset costs nothing')
 -- every submesh well formed: 4 verts, uvs, normals per quad, faces referencing them
 local bad = 0
-for _, lod in ipairs(meshes[#meshes]) do
-  for _, sm in ipairs(lod) do
+for _, m in ipairs(meshes) do
+  for _, sm in ipairs(m[1]) do
     if #sm.verts ~= #sm.uvs or #sm.verts ~= #sm.normals or #sm.faces ~= #sm.verts / 4 * 6 or not materialsMade[sm.material] then bad = bad + 1 end
     for _, f in ipairs(sm.faces) do if f.v < 0 or f.v >= #sm.verts then bad = bad + 1 end end
   end
@@ -191,13 +203,21 @@ end
 check(texOk, 'ped textures written as PNG files')
 -- peds stand on the ground (z = 0 in BeamNG) and are upright: the standing peds' sprites run from the ground to
 -- the ped height in the data (0.25 C1 units = 1.725 m). (Gibs fall on below the ground before they go.)
+-- (each sprite's corners: its unit quad scaled, turned by its quaternion and moved)
+local function rotate(q, x, y, z)
+  local qx, qy, qz, qw = q[1], q[2], q[3], q[4]
+  local tx, ty, tz = 2 * (qy * z - qz * y), 2 * (qz * x - qx * z), 2 * (qx * y - qy * x)
+  return x + qw * tx + (qy * tz - qz * ty), y + qw * ty + (qz * tx - qx * tz), z + qw * tz + (qx * ty - qy * tx)
+end
 local standing = 0
-for _, lod in ipairs(meshes[#meshes]) do
-  for _, sm in ipairs(lod) do
-    local lo, hi = math.huge, -math.huge
-    for _, v in ipairs(sm.verts) do lo, hi = math.min(lo, v.z), math.max(hi, v.z) end
-    if math.abs(lo) < 0.01 and math.abs(hi - 1.725) < 0.01 then standing = standing + #sm.verts / 4 end
+for _, o in ipairs(shownNow) do
+  local lo, hi = math.huge, -math.huge
+  for _, v in ipairs(o.mesh[1][1].verts) do
+    local _, _, z = rotate(o.rot, v.x * o.scl.x, v.y * o.scl.y, v.z * o.scl.z)
+    z = z + o.pos.z
+    lo, hi = math.min(lo, z), math.max(hi, z)
   end
+  if math.abs(lo) < 0.01 and math.abs(hi - 1.725) < 0.01 then standing = standing + 1 end
 end
 check(standing > 20, 'standing peds drawn upright on the ground: ' .. standing)
 -- the ped area: by default a 1 km square around the middle of the road network (0, 0) (peds go a few metres around

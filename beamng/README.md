@@ -33,10 +33,12 @@ version of the parts of Custom Shaders Patch's Lua API it uses:
   car (the same exploration as AC maps without an AI line): peds on the roads and the ground around them that
   cars can reach. Never in water (sea, lakes, rivers): ground under a water surface doesn't count.
 - **Drawing**: each sprite frame becomes a PNG (written to BeamNG's `temp/carmapeds` folder) with its own
-  material (opaque, cut out, unlit); the visible peds, gibs and blood trails are written into one procedural
-  mesh, turned to face the camera, 20 times a second. Draw distance 150 m by default.
-- **Diagnostics** in the window: the time per frame the app, the drawing and the mesh take, the sprites drawn,
-  raycasts a second, and a self-test of whether the sprite mesh has collision (raycasts hitting the sprites).
+  material. Every sprite in view (peds, gibs, blood trails) is a one-quad mesh, taken from a pool per frame image
+  and moved, turned to face the camera and sized every frame; the meshes are made once and reused, never rebuilt.
+  Draw distance 150 m by default. The sprites' material has three variants, chosen with the arrows in the
+  window (classic cut-out, PBR cut-out, translucent), in case one looks wrong in your version of BeamNG.
+- **Diagnostics** in the window: the time per frame the app, the drawing and placing the sprites take, the sprites drawn,
+  raycasts a second, and a self-test of whether the sprites have collision (raycasts hitting the sprites).
   "Draw the peds" turns the drawing off, to see what it costs. Lua errors are listed with where they happened
   (the full traceback is in BeamNG's log).
 - **Sounds**: Carmageddon's own WAV files, louder the closer they are (no left/right panning yet: BeamNG's game

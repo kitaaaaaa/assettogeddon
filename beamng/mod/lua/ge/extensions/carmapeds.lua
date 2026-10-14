@@ -3,8 +3,9 @@
 --
 -- Coordinates: AC's world is y-up and left-handed, BeamNG's z-up and right-handed; swapping y and z maps one onto
 -- the other (a mirror, which is what changes the handedness), so the app's sense of left and right holds.
--- Drawing: the app draws textured quads (render.shaderedQuad); they are collected each frame and written into
--- one ProceduralMesh, one submesh per texture, each texture a PNG file with its own Material.
+-- Drawing: the app draws textured quads (render.shaderedQuad); they are collected each frame, and each is shown
+-- by a one-quad ProceduralMesh from a pool per texture (each texture a PNG file with its own Material), moved,
+-- turned and sized onto it. Nothing is rebuilt while running.
 -- Sounds: played with Engine.Audio.playOnce, loudness falling off with the distance to the camera (no panning).
 local M = {}
 
@@ -17,7 +18,6 @@ local DATA_ROOT = '/carmapeds_data'                 -- the user's copy of Carmag
 local TEMP_DIR = '/temp/carmapeds/'                 -- generated textures
 local SETTINGS_FILE = '/settings/carmapeds.json'
 local AREA_FILE = '/settings/carmapeds_beamng.json' -- the ped area (BeamNG only)
-local MESH_HZ = 20                                  -- how often the ped mesh is rebuilt
 
 local function clock() return (os.clockhp and os.clockhp() or os.clock()) end
 
@@ -94,7 +94,6 @@ local storage           -- settings (ac.storage), saved to SETTINGS_FILE
 local storageSaved, storageCheckAt = '', 0
 local renderCallback
 local quads = {}        -- this frame's quads: {tex, color, mirror, p1..p4 (AC axes)}
-local meshObj, meshAt = nil, -1
 local materials = {}    -- material name -> true (created)
 local imageCount = 0
 local audios = {}       -- playing one-shot sounds (for isValid)
@@ -388,19 +387,39 @@ local function decodeImage(bytes)
   return {path = path, material = 'carmapeds_img' .. imageCount}
 end
 
+-- How the sprites' materials are made (chosen in the window, until the right one is known for sure):
+-- 1 classic cut-out (version 0: colorMap, alpha test, unlit), 2 PBR cut-out (version 1.5: baseColorMap, alpha test),
+-- 3 translucent (version 1.5, blended, writing depth)
+local MATERIAL_MODES = {'classic cut-out', 'PBR cut-out', 'translucent'}
+local materialMode = 1
+do
+  local saved = jsonReadFile and jsonReadFile(AREA_FILE)
+  if type(saved) == 'table' and MATERIAL_MODES[saved.materialMode] then materialMode = saved.materialMode end
+end
 local function ensureMaterial(name, texPath, color)
   if materials[name] then return end
   materials[name] = true
   local mat = createObject('Material')
   mat:setField('mapTo', 0, name)
   if texPath then
-    -- an opaque, cut-out, unlit sprite (like the AC app's): the classic material, its texture's alpha only clips
-    mat:setField('version', 0, '0')
-    mat:setField('colorMap', 0, texPath)
+    if materialMode == 1 then
+      mat:setField('version', 0, '0')
+      mat:setField('colorMap', 0, texPath)
+      mat:setField('emissive', 0, '1')
+    else
+      mat:setField('version', 0, '1.5')
+      mat:setField('baseColorMap', 0, texPath)
+      mat:setField('roughnessFactor', 0, '1')
+      mat:setField('metallicFactor', 0, '0')
+    end
     mat:setField('alphaTest', 0, '1')
     mat:setField('alphaRef', 0, '127')
-    mat:setField('translucent', 0, '0')
-    mat:setField('emissive', 0, '1')
+    if materialMode == 3 then
+      mat:setField('translucent', 0, '1')
+      mat:setField('translucentZWrite', 0, '1')
+    else
+      mat:setField('translucent', 0, '0')
+    end
     mat:setField('castShadows', 0, '0')
   else
     mat:setField('diffuseColor', 0, color or '0.35 0 0 0.8')
@@ -412,7 +431,7 @@ local function ensureMaterial(name, texPath, color)
 end
 
 -- ---------------------------------------------------------------------------------------------
--- render.*: quads collected, then one ProceduralMesh with a submesh per texture
+-- render.*: quads collected each frame (drawn by drawSprites below)
 local function shaderedQuad(dc)
   local tex = dc.textures and dc.textures.txSprite
   local q = {p1 = avec3():set(dc.p1), p2 = avec3():set(dc.p2), p3 = avec3():set(dc.p3), p4 = avec3():set(dc.p4)}
@@ -429,50 +448,114 @@ local function shaderedQuad(dc)
   quads[#quads + 1] = q
 end
 
-local function rebuildMesh()
-  if #quads == 0 then
-    if meshObj then pcall(function() meshObj.hidden = true end) end
-    return
+-- Drawing: a pool of one-quad meshes per sprite image (and mirrored or not), each made once; every frame the
+-- sprites in view take one from their image's pool, which is moved, turned and sized to the app's quad
+-- (setPosRot, setScale). Nothing is rebuilt (rebuilding one big mesh many times a second was slow).
+-- The unit quad: x across (-0.5..0.5), z up (-0.5..0.5), facing along y.
+local pools = {}        -- key (material, mirrored) -> {objects}
+local poolUsed = {}     -- key -> how many are in use this frame
+local poolShown = {}    -- key -> how many were shown last frame
+local poolObjects = 0
+local MAX_SPRITES = 1500
+local function unitQuad(material, mirror)
+  local u0, u1 = 0, 1
+  if mirror then u0, u1 = 1, 0 end
+  return {
+    verts = {{x = -0.5, y = 0, z = 0.5}, {x = 0.5, y = 0, z = 0.5}, {x = 0.5, y = 0, z = -0.5}, {x = -0.5, y = 0, z = -0.5}},
+    uvs = {{u = u0, v = 0}, {u = u1, v = 0}, {u = u1, v = 1}, {u = u0, v = 1}},
+    normals = {{x = 0, y = -1, z = 0}, {x = 0, y = -1, z = 0}, {x = 0, y = -1, z = 0}, {x = 0, y = -1, z = 0}},
+    faces = {{v = 0, n = 0, u = 0}, {v = 1, n = 1, u = 1}, {v = 2, n = 2, u = 2},
+             {v = 0, n = 0, u = 0}, {v = 2, n = 2, u = 2}, {v = 3, n = 3, u = 3}},
+    material = material,
+  }
+end
+local function newSprite(material, mirror)
+  local o = createObject('ProceduralMesh')
+  o:setPosition(BVec3(0, 0, -10000))
+  o.canSave = false
+  pcall(function() o.dynamic = true end)
+  o:registerObject('carmapeds_sprite' .. poolObjects)
+  if scenetree.MissionGroup then scenetree.MissionGroup:add(o.obj) end
+  o:createMesh({{unitQuad(material, mirror)}})
+  poolObjects = poolObjects + 1
+  return o
+end
+local function setHidden(o, h) pcall(function() o.hidden = h end) end
+
+-- The rotation (quaternion x, y, z, w) taking the unit quad's y axis to dir and z to up (x = dir x up): BeamNG's
+-- own quatFromDir (its convention for setPosRot), else from the rotation matrix m (rows m0*, m1*, m2*)
+local function rotation(dx, dy, dz, ux, uy, uz)
+  if quatFromDir then
+    local q = quatFromDir(BVec3(dx, dy, dz), BVec3(ux, uy, uz))
+    return q.x, q.y, q.z, q.w
   end
-  if not meshObj then
-    meshObj = createObject('ProceduralMesh')
-    meshObj:setPosition(BVec3(0, 0, 0))
-    meshObj.canSave = false
-    meshObj:registerObject('carmapeds_peds')
-    if scenetree.MissionGroup then scenetree.MissionGroup:add(meshObj.obj) end
+  local xx, xy, xz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+  local m00, m01, m02, m10, m11, m12, m20, m21, m22 = xx, dx, ux, xy, dy, uy, xz, dz, uz
+  local tr = m00 + m11 + m22
+  if tr > 0 then
+    local s = math.sqrt(tr + 1) * 2
+    return (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, s / 4
+  elseif m00 > m11 and m00 > m22 then
+    local s = math.sqrt(1 + m00 - m11 - m22) * 2
+    return s / 4, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s
+  elseif m11 > m22 then
+    local s = math.sqrt(1 + m11 - m00 - m22) * 2
+    return (m01 + m10) / s, s / 4, (m12 + m21) / s, (m02 - m20) / s
+  else
+    local s = math.sqrt(1 + m22 - m00 - m11) * 2
+    return (m02 + m20) / s, (m12 + m21) / s, s / 4, (m10 - m01) / s
   end
-  pcall(function() meshObj.hidden = false end)
-  local groups, order = {}, {}
+end
+
+local function drawSprites()
+  for k in pairs(poolUsed) do poolUsed[k] = 0 end
   for _, q in ipairs(quads) do
-    local g = groups[q.material]
-    if not g then
-      ensureMaterial(q.material, q.texPath, q.colour)
-      g = {verts = {}, uvs = {}, normals = {}, faces = {}, material = q.material}
-      groups[q.material] = g
-      order[#order + 1] = g
-    end
-    local base = #g.verts
-    for _, p in ipairs({q.p1, q.p2, q.p3, q.p4}) do
-      g.verts[#g.verts + 1] = {x = p.x, y = p.z, z = p.y}
-    end
-    local u0, u1 = 0, 1
-    if q.mirror then u0, u1 = 1, 0 end
-    g.uvs[#g.uvs + 1] = {u = u0, v = 0}
-    g.uvs[#g.uvs + 1] = {u = u1, v = 0}
-    g.uvs[#g.uvs + 1] = {u = u1, v = 1}
-    g.uvs[#g.uvs + 1] = {u = u0, v = 1}
-    -- normal: the quad's own (towards the camera; it's two-sided anyway)
-    local ax, ay, az = q.p2.x - q.p1.x, q.p2.y - q.p1.y, q.p2.z - q.p1.z
-    local bx, by, bz = q.p4.x - q.p1.x, q.p4.y - q.p1.y, q.p4.z - q.p1.z
-    local nx, ny, nz = ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx
-    local nl = math.sqrt(nx * nx + ny * ny + nz * nz)
-    if nl > 0 then nx, ny, nz = nx / nl, ny / nl, nz / nl end
-    for _ = 1, 4 do g.normals[#g.normals + 1] = {x = nx, y = nz, z = ny} end
-    for _, t in ipairs({{0, 1, 2}, {0, 2, 3}}) do
-      for _, k in ipairs(t) do g.faces[#g.faces + 1] = {v = base + k, n = base + k, u = base + k} end
+    -- the quad in BeamNG's axes: p1 top left, p2 top right, p4 bottom left
+    local p1, p2, p4 = toBNG(q.p1.x, q.p1.y, q.p1.z), toBNG(q.p2.x, q.p2.y, q.p2.z), toBNG(q.p4.x, q.p4.y, q.p4.z)
+    local rx, ry, rz = p2.x - p1.x, p2.y - p1.y, p2.z - p1.z
+    local ux, uy, uz = p1.x - p4.x, p1.y - p4.y, p1.z - p4.z
+    local w = math.sqrt(rx * rx + ry * ry + rz * rz)
+    if w > 1e-4 then
+      rx, ry, rz = rx / w, ry / w, rz / w
+      local d = ux * rx + uy * ry + uz * rz  -- up made square to across
+      ux, uy, uz = ux - rx * d, uy - ry * d, uz - rz * d
+      local h = math.sqrt(ux * ux + uy * uy + uz * uz)
+      if h > 1e-4 then
+        ux, uy, uz = ux / h, uy / h, uz / h
+        local yx, yy, yz = uy * rz - uz * ry, uz * rx - ux * rz, ux * ry - uy * rx  -- y = up x across
+        local material = q.material .. '_' .. materialMode
+        local key = material .. (q.mirror and ':m' or '')
+        local pool = pools[key]
+        if not pool then pool = {} pools[key] = pool end
+        local n = (poolUsed[key] or 0) + 1
+        local o = pool[n]
+        if not o and poolObjects < MAX_SPRITES then
+          ensureMaterial(material, q.texPath, q.colour)
+          o = newSprite(material, q.mirror)
+          pool[n] = o
+        end
+        if o then
+          poolUsed[key] = n
+          local qx, qy, qz, qw = rotation(yx, yy, yz, ux, uy, uz)
+          local cx, cy, cz = p4.x + (p2.x - p4.x) / 2, p4.y + (p2.y - p4.y) / 2, p4.z + (p2.z - p4.z) / 2
+          o:setPosRot(cx, cy, cz, qx, qy, qz, qw)
+          o:setScale(BVec3(w, 1, h))
+          if n > (poolShown[key] or 0) then setHidden(o, false) end
+        end
+      end
     end
   end
-  meshObj:createMesh({order})
+  -- hide what isn't needed any more
+  for key, pool in pairs(pools) do
+    local used, shown = poolUsed[key] or 0, poolShown[key] or 0
+    for i = used + 1, shown do if pool[i] then setHidden(pool[i], true) end end
+    poolShown[key] = used
+  end
+end
+
+local function deleteSprites()
+  for _, pool in pairs(pools) do for _, o in ipairs(pool) do pcall(function() o:delete() end) end end
+  pools, poolUsed, poolShown, poolObjects = {}, {}, {}, 0
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -564,7 +647,7 @@ end
 -- ---------------------------------------------------------------------------------------------
 -- Starting the app for a level
 local function stopApp()
-  if meshObj then pcall(function() meshObj:delete() end) meshObj = nil end
+  deleteSprites()
   env, renderCallback, quads, cars, carIds, prevVel, roadNodes = nil, nil, {}, {}, {}, {}, nil
   jumpCallbacks, areaSeedList, water, meshBlocks, selfTestQuads = {}, nil, nil, nil, nil
   saveStorageIfChanged()
@@ -671,7 +754,7 @@ local function areaWindow()
   local changed = areaEdit.half ~= area.half or areaEdit.cx ~= area.cx or areaEdit.cy ~= area.cy
   if im.Button(changed and 'Apply (places the peds again)' or 'Apply') and changed then
     area.half, area.cx, area.cy = areaEdit.half, areaEdit.cx, areaEdit.cy
-    if jsonWriteFile then jsonWriteFile(AREA_FILE, {half = area.half, cx = area.cx, cy = area.cy}, true) end
+    if jsonWriteFile then jsonWriteFile(AREA_FILE, {half = area.half, cx = area.cx, cy = area.cy, materialMode = materialMode}, true) end
     startApp()
   end
   local cx, cy = areaCentre()
@@ -680,12 +763,24 @@ local function areaWindow()
   local b = im.BoolPtr(drawPeds)
   if im.Checkbox('Draw the peds', b) then drawPeds = b[0] end
   if shown.update then
-    im.TextWrapped(esc(('Per frame: app %.2f ms, drawing %.2f ms + mesh %.2f ms (%d sprites); %.0f raycasts a second.')
-      :format(shown.update, shown.collect, shown.mesh, shown.quads, shown.rays)))
+    im.TextWrapped(esc(('Per frame: app %.2f ms, drawing %.2f ms + placing sprites %.2f ms (%d sprites, %d made); %.0f raycasts a second.')
+      :format(shown.update, shown.collect, shown.mesh, shown.quads, poolObjects, shown.rays)))
   end
+  -- the sprites' material: which one looks right in this version of BeamNG
+  local mode = materialMode
+  if im.Button('<##matMode') then mode = (materialMode - 2) % #MATERIAL_MODES + 1 end
+  im.SameLine()
+  if im.Button('>##matMode') then mode = materialMode % #MATERIAL_MODES + 1 end
+  if mode ~= materialMode then
+    materialMode = mode
+    deleteSprites()
+    if jsonWriteFile then jsonWriteFile(AREA_FILE, {half = area.half, cx = area.cx, cy = area.cy, materialMode = materialMode}, true) end
+  end
+  im.SameLine()
+  im.TextWrapped(esc(('Sprite material: %d, %s'):format(materialMode, MATERIAL_MODES[materialMode])))
   if meshBlocks ~= nil then
-    im.TextWrapped(meshBlocks and 'Sprite mesh test: it has collision (raycasts hit the sprites).'
-      or 'Sprite mesh test: no collision.')
+    im.TextWrapped(meshBlocks and 'Sprite test: they have collision (raycasts hit them).'
+      or 'Sprite test: no collision.')
   end
 end
 
@@ -748,14 +843,13 @@ local function onUpdate(dtReal, dtSim)
   stats.update = stats.update + (t1 - t0)
   if selfTestQuads and meshBlocks == nil then selfTest() end
 
-  -- the peds' mesh, MESH_HZ times a second
+  -- the sprites: the app's quads, then the pool objects moved onto them
   local now = clock()
-  if renderCallback and now - meshAt >= 1 / MESH_HZ then
-    meshAt = now
+  if renderCallback then
     quads = {}
     if drawPeds then call(renderCallback) end
     local t2 = clock()
-    call(rebuildMesh)
+    call(drawSprites)
     stats.collect, stats.mesh = stats.collect + (t2 - now), stats.mesh + (clock() - t2)
     stats.quads = #quads
     if meshBlocks == nil and #quads >= 3 then selfTestQuads = quads end
