@@ -4,7 +4,8 @@
 --   options: {dataDir, online = bool, mySid = 0, sids = {[index] = sid}, direct = bool}
 return function(opts)
   opts = opts or {}
-  local H = {logs = {}, cars = {}, outbox = {}, wrapped = {}, quads = 0, decoded = 0, audioCreated = 0, time = 0}
+  local H = {logs = {}, cars = {}, outbox = {}, wrapped = {}, quads = 0, decoded = 0, audioCreated = 0, time = 0,
+    online = {created = 0, attempts = 0, refused = 0, lastSent = -1e9, layouts = {}}}
 
   -- ---- vectors ---------------------------------------------------------------------------------
   local vec3mt = {}
@@ -162,12 +163,19 @@ return function(opts)
       H.replayEnd = onEnd
       return H.replayStream
     end,
+    -- as CSP: a standard (not custom) server takes one message per 200 ms from a script; sending sooner is
+    -- refused (returns false). H.online counts event types made, send calls and refusals.
     OnlineEvent = function(layout, callback)
       local data = build(layout)
       local kind = layout.pedCount and 'hello' or 'events'
       H.onlineCallbacks = H.onlineCallbacks or {}
       H.onlineCallbacks[kind] = {callback = callback, layout = layout}
+      H.online.created = H.online.created + 1
+      H.online.layouts[kind] = layout
       local function send(msg)
+        H.online.attempts = H.online.attempts + 1
+        if not opts.direct and H.time - H.online.lastSent < 0.2 then H.online.refused = H.online.refused + 1 return false end
+        H.online.lastSent = H.time
         if msg then for k, v in pairs(msg) do data[k] = v end end
         H.outbox[#H.outbox + 1] = {kind = kind, time = H.time, data = copy(data)}
         return true

@@ -734,8 +734,16 @@ local function emit(ev)
   if not events.add(eventLog, ev) then return end
   applyEvent(ev, true)
   if online then
-    local q = ev.kind == events.ANCHOR and sendQueue.low or sendQueue.high
-    q[#q + 1] = ev
+    if ev.kind == events.ANCHOR then
+      -- where a ped calmed down: only its latest place matters, and the queue stays small however busy it gets
+      local q = sendQueue.low
+      for i = #q, 1, -1 do if q[i].ped == ev.ped then table.remove(q, i) end end
+      q[#q + 1] = ev
+      while #q > 64 do table.remove(q, 1) end
+    else
+      local q = sendQueue.high
+      q[#q + 1] = ev
+    end
   end
   replayPending[#replayPending + 1] = ev
 end
@@ -764,6 +772,7 @@ local function applyDue(t)
 end
 
 local lastSend = 0
+local sendBuffer  -- the events message's data, fetched once (CSP: save the reference, fill it, send nil)
 local function flushSends()
   if not online or not sendEvents then return end
   local now = os.preciseClock()
@@ -778,10 +787,11 @@ local function flushSends()
     end
   end
   if count == 0 then return end
-  local st = sendEventsData()
-  for i = 0, events.PER_MESSAGE - 1 do events.write(st, i, msg[i + 1] or {kind = 0}) end
-  if sendEvents(nil) then lastSend = now
-  else for i = count, 1, -1 do table.insert(sendQueue.high, 1, msg[i]) end end  -- rate limited: retry later
+  sendBuffer = sendBuffer or sendEventsData()
+  for i = 0, events.PER_MESSAGE - 1 do events.write(sendBuffer, i, msg[i + 1] or {kind = 0}) end
+  -- refused (rate limited): put them back and wait a whole interval before trying again, not every frame
+  if not sendEvents(nil) then for i = count, 1, -1 do table.insert(sendQueue.high, 1, msg[i]) end end
+  lastSend = now
 end
 
 local lastHello = -1e9
@@ -1598,7 +1608,7 @@ pedlogic.mirrorBearings = settings.mirrorBearings
 if __carmapedsTest then
   __carmapedsTest.state = function()
     return {peds = peds, cars = cars, bannerQueue = bannerQueue, audioFiles = audioFiles, playing = playing, scores = scores, log = eventLog,
-      simT = simT, clockT = clockT}
+      simT = simT, clockT = clockT, sendQueue = sendQueue}
   end
 end
 startLoading()
