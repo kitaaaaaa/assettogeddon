@@ -173,5 +173,36 @@ END OF PEDESTRIANS
   check(p.sequences[2].rate == peddata.RATE_FIXED and #p.sequences[2].frames == 1 and p.sequences[2].loopingFrameStart == 1, 'fixed sequence')
 end
 
+-- c1data: the whole fake data folder (FAKE_C1=<dir>, from tests/make_fake_c1.lua): recovery cost, the races'
+-- peds and their groups, the German robots
+local fake = os.getenv('FAKE_C1')
+if fake then
+  local c1data = require('src/c1data')
+  local fio = {exists = function(p) local f = io.open(p, 'rb') if f then f:close() return true end return false end,
+    read = function(p) local f = io.open(p, 'rb') if not f then return nil end local s = f:read('*a') f:close() return s end}
+  local d = assert(c1data.load(fake, fio))
+  check(d.recoveryCost == 4000, 'recovery cost: the highest skill level\'s: ' .. tostring(d.recoveryCost))
+  check(#d.races == 3 and d.races[1].name == 'Town Race' and d.races[2].file == 'MINEA1.TXT', 'race list read')
+  local r1, r2 = d.races[1].refs, d.races[2].refs
+  check(r1 and r1[1] == 2 and r1[99] == 1 and r1[19] == 1 and not r1[2], 'town race peds')
+  check(r2 and r2[2] == 2 and not r2[1], 'mine race peds')
+  local keys = {}
+  for _, g in ipairs(d.groups) do keys[g.key] = g end
+  check(keys['group:TOWNA'] and keys['group:MINEA'] and keys['group:MINEB'], 'groups by track file name')
+  check(keys['race:MINEA1.TXT'] and keys['race:MINEA1.TXT'].refs[2] and not keys['race:MINEA1.TXT'].refs[1], 'a race on its own')
+  check(d.hasRobots and not d.robots and d.pedFile == 'PEDESTRN.TXT', 'robots offered, not used unless asked')
+  check(d.gibs[3][2] == 'SPLAT1.PIX', 'normal gibs')
+  local rb = assert(c1data.load(fake, fio, nil, {robots = true}))
+  check(rb.robots and rb.pedFile == 'BORING.TXT' and #rb.peds == #d.peds, 'robots: BORING.TXT')
+  check(rb.gibs[3][2] == 'GSPLAT1.PIX' and rb.gibs[3][4] == 'SPLAT2.PIX', 'robots: G gibs where present')
+  check(d.bloodColour and #d.bloodColour == 3 and (d.bloodColour[1] ~= rb.bloodColour[1] or d.bloodColour[2] ~= rb.bloodColour[2]),
+    'blood colour from the splats')
+  local found32 = false
+  for ref in pairs(c1data.EXCLUDED_REFS) do if ref == 32 then found32 = true end end
+  check(not found32, 'RO1 (ref 32) back')
+  -- a race file without the ped section
+  check(c1data.parseRacePeds('VERSION 6\r\nstuff\r\n') == nil, 'no ped section: nil')
+end
+
 print(failures == 0 and 'all tests passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)

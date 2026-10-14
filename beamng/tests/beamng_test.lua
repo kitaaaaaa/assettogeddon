@@ -154,6 +154,16 @@ for _, p in ipairs(__carmapedsTest.state().peds) do if p.hitPoints < 0 then dead
 local sc = __carmapedsTest.state().scores[0]
 print(('dead %d, player credits %s'):format(dead, sc and sc.credits or 'none'))
 check(dead > 0 and sc and sc.kills > 0, 'the player\'s car kills peds and scores')
+-- a reset (BeamNG's onVehicleResetted) costs the recovery cost; another vehicle's id doesn't touch the player
+local before = sc.credits
+ext.onVehicleResetted(10)
+ext.onUpdate(dt, dt)
+local after = __carmapedsTest.state().scores[0].credits
+print(('reset: %d -> %d credits'):format(before, after))
+check(after - before == -4000, 'a reset costs 4000 credits: ' .. (after - before))
+ext.onVehicleResetted(99)
+ext.onUpdate(dt, dt)
+check(__carmapedsTest.state().scores[0].credits == after, 'an unknown vehicle\'s reset costs nothing')
 -- every submesh well formed: 4 verts, uvs, normals per quad, faces referencing them
 local bad = 0
 for _, lod in ipairs(meshes[#meshes]) do

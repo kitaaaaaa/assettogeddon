@@ -88,6 +88,7 @@ local env               -- the app's environment
 local sim               -- the CSP-like sim state the app reads
 local cars = {}         -- index -> CSP-like car state
 local carIds = {}       -- index -> BeamNG object id
+local jumpCallbacks = {} -- index -> the app's ac.onCarJumped callbacks
 local storage           -- settings (ac.storage), saved to SETTINGS_FILE
 local storageSaved, storageCheckAt = '', 0
 local renderCallback
@@ -294,7 +295,11 @@ local function shaderedQuad(dc)
     q.material, q.texPath = tex.material, tex.path
     q.mirror = dc.values and dc.values.gMirror and dc.values.gMirror > 0.5
   else
-    q.material = 'carmapeds_blood'  -- the blood trails: no texture
+    -- the blood trails: no texture, the colour the app gives (its splats' colour)
+    local b = dc.values and dc.values.gBlood
+    local r, g, bl = b and b.x or 0.35, b and b.y or 0, b and b.z or 0
+    q.material = ('carmapeds_blood_%02x%02x%02x'):format(math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(bl * 255 + 0.5))
+    q.colour = ('%.3f %.3f %.3f 0.8'):format(r, g, bl)
   end
   quads[#quads + 1] = q
 end
@@ -316,7 +321,7 @@ local function rebuildMesh()
   for _, q in ipairs(quads) do
     local g = groups[q.material]
     if not g then
-      ensureMaterial(q.material, q.texPath)
+      ensureMaterial(q.material, q.texPath, q.colour)
       g = {verts = {}, uvs = {}, normals = {}, faces = {}, material = q.material}
       groups[q.material] = g
       order[#order + 1] = g
@@ -436,6 +441,7 @@ end
 local function stopApp()
   if meshObj then pcall(function() meshObj:delete() end) meshObj = nil end
   env, renderCallback, quads, cars, carIds, prevVel, roadNodes = nil, nil, {}, {}, {}, {}, nil
+  jumpCallbacks = {}
   saveStorageIfChanged()
 end
 
@@ -467,6 +473,11 @@ local function startApp()
       getTrackAISplineSides = function() return avec2() end,
       getDriverName = function(i) return 'Car ' .. tostring(i) end,
       findNodes = findNodes,
+      -- called on BeamNG's vehicle resets (to the spawn point, reset and move the spawn point, in place)
+      onCarJumped = function(i, cb)
+        jumpCallbacks[i] = jumpCallbacks[i] or {}
+        table.insert(jumpCallbacks[i], cb)
+      end,
       StructItem = S,
       AudioEvent = {fromFile = fromFile},
       ReplayStream = function(layout) return buildStruct(layout) end,
@@ -568,6 +579,17 @@ local function onExtensionLoaded()
   if getCurrentLevelIdentifier and getCurrentLevelIdentifier() then startApp() end
 end
 local function onExtensionUnloaded() stopApp() end
+local function onVehicleResetted(vid)
+  if not env then return end
+  for index, id in pairs(carIds) do
+    if id == vid then
+      for _, cb in ipairs(jumpCallbacks[index] or {}) do
+        local ok, err = pcall(cb, index)
+        if not ok then appError = tostring(err) logf('E', appError) end
+      end
+    end
+  end
+end
 
 -- console: carmapeds.toggleWindow() shows or hides the window; carmapeds.restart() reloads the app
 M.toggleWindow = function() windowOpen = not windowOpen end
@@ -577,4 +599,5 @@ M.onClientStartMission = onClientStartMission
 M.onClientEndMission = onClientEndMission
 M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded
+M.onVehicleResetted = onVehicleResetted
 return M

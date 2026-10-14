@@ -20,6 +20,9 @@ local settings = ac.storage{
   mirrorSprites = false,
   mirrorBearings = false,
   hud = true,
+  pedsOff = false,  -- no peds at all (scoring, cunning stunts and reset costs still on)
+  pedGroup = 'all', -- which ped types: 'all', or a group of C1's races (c1data.raceGroups) by its key
+  robots = false,   -- the German version's robots (BORING.TXT), when the data has them
 }
 
 local U = pedlogic.U
@@ -72,9 +75,9 @@ local function startLoading()
       io_.lastError = why
       return nil
     end
-    local d, err = c1data.load(__dirname, io_, coroutine.yield)
+    local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots})
     if not d then
-      if not io.fileExists(__dirname .. '/DATA/PEDESTRN.TXT') then
+      if not io.fileExists(__dirname .. '/DATA/PEDESTRN.TXT') and not io.fileExists(__dirname .. '/DATA/BORING.TXT') then
         err = 'Copy the DATA folder from your Carmageddon 1 install into this app\'s folder ('
           .. __dirname .. '\\DATA), then press Reload in the settings.'
       end
@@ -102,7 +105,7 @@ local function startLoading()
     if #d.peds == 0 then
       local w = {}
       for i = 1, math.min(#d.warnings, 5) do w[i] = d.warnings[i] end
-      loadError = 'No usable pedestrians found in PEDESTRN.TXT.' .. (#w > 0 and ('\n' .. table.concat(w, '\n')) or '')
+      loadError = 'No usable pedestrians found in ' .. d.pedFile .. '.' .. (#w > 0 and ('\n' .. table.concat(w, '\n')) or '')
       return
     end
     data = d
@@ -515,12 +518,13 @@ end
 -- 2.4 m from the car's middle. Pit boxes if the track has no grid. Each gets a short path leading away from
 -- the slot, to run along when scared; calm, she stands at its start.
 local GRID_GIRLS = 8
-local function spawnGridGirls(def, firstId)
+local GRID_GIRL_IDS = 5001  -- grid girls' ids: 5001.. (above any random ped's)
+local function spawnGridGirls(def, firstId, most)
   local slots = spawnNodes('AC_START_')
   if #slots == 0 then slots = spawnNodes('AC_PIT_') end
   local out = {}
   for i = 1, #slots, 2 do
-    if #out >= GRID_GIRLS then break end
+    if #out >= math.min(GRID_GIRLS, most) then break end
     local sl = slots[i]
     local ll = math.sqrt(sl.lx * sl.lx + sl.lz * sl.lz)
     if ll > 0 then
@@ -552,24 +556,42 @@ local function spawnGridGirls(def, firstId)
   return out
 end
 
--- Builds all peds (a coroutine: path generation raycasts are spread over frames).
-local function populateTask(pedCount)
+-- The chosen group of ped types ({key, label, refs}), nil for all of them.
+local function pedGroup(key)
+  if not data or not key then return nil end
+  for _, g in ipairs(data.groups or {}) do if g.key == key then return g end end
+  return nil
+end
+
+-- Builds all peds (a coroutine: path generation raycasts are spread over frames). pedCount includes the flagman
+-- and the grid girls, who are the last to go when it is turned down (9: only them; 0: no peds at all).
+local function populateTask(pedCount, groupKey)
   seed = rng.hash(ac.getTrackFullID('/'))
   local spawnRandom = rng.new(seed)
   pedlogic.setRandom(rng.new(seed + 1))
   local list, byId = {}, {}
-  local randomTypes, flagmanType, gridGirlType = {}, nil, nil
+  local group = pedGroup(groupKey)
+  local randomTypes, others, flagmanType, gridGirlType = {}, {}, nil, nil
   for _, def in ipairs(data.peds) do
     if def.ref == c1data.FLAGMAN_REF then flagmanType = def
     elseif def.ref == c1data.GRID_GIRL.ref then gridGirlType = def
-    else randomTypes[#randomTypes + 1] = def end
+    else
+      others[#others + 1] = def
+      if not group or group.refs[def.ref] then randomTypes[#randomTypes + 1] = def end
+    end
   end
-  if #randomTypes == 0 then randomTypes = data.peds end
-  if flagmanType then
+  if #randomTypes == 0 then randomTypes = #others > 0 and others or data.peds end
+  local left = pedCount
+  if flagmanType and left > 0 then
     local f = spawnFlagman(flagmanType)
-    if f then list[#list + 1], byId[0] = f, f end
+    if f then list[#list + 1], byId[0], left = f, f, left - 1 end
   end
-  for id = 1, pedCount do
+  if gridGirlType and left > 0 then
+    for _, g in ipairs(spawnGridGirls(gridGirlType, GRID_GIRL_IDS, left)) do
+      list[#list + 1], byId[g.id], left = g, g, left - 1
+    end
+  end
+  for id = 1, left do
     local def = randomTypes[1 + math.floor(spawnRandom() * #randomTypes)]
     local x, y, z, fx, fz = randomSpot(spawnRandom)
     if x then
@@ -578,9 +600,6 @@ local function populateTask(pedCount)
       list[#list + 1], byId[id] = ped, ped
     end
     if id % 10 == 0 then coroutine.yield() end
-  end
-  if gridGirlType then
-    for _, g in ipairs(spawnGridGirls(gridGirlType, pedCount + 1)) do list[#list + 1], byId[g.id] = g, g end
   end
   return list, byId
 end
@@ -600,7 +619,7 @@ local sessionIndex
 local online = sim.isOnlineRace
 local mySid = 0
 local presence = {}        -- session id -> os.preciseClock() of its last hello
-local hostSettings = nil   -- {pedCount, respawnSeconds, runSpeed, runDistance} from the host, when it isn't us
+local hostSettings = nil   -- {pedCount, respawnSeconds, runSpeed, runDistance, groupHash} from the host, when it isn't us
 
 local function carSid(i)
   local car = ac.getCar(i)
@@ -623,7 +642,7 @@ local function decidesFor(sid)
 end
 
 -- Peds scale with the map: per km of AI line, or for maps without one, per km of the map's width plus depth.
-local MIN_PEDS, MAX_PEDS = 10, 4000
+local MAX_PEDS = 4000
 local function trackKm()
   if splineAvailable() and sim.trackLengthM > 0 then return sim.trackLengthM / 1000 end
   if explored and #explored > 0 then return math.max(0.5, #explored * explore.STEP / 1000) end
@@ -632,9 +651,16 @@ local function trackKm()
   return 5
 end
 local function ownPedCount()
-  return math.max(MIN_PEDS, math.min(MAX_PEDS, math.floor(settings.pedsPerKm * trackKm() + 0.5)))
+  if settings.pedsOff then return 0 end
+  return math.max(0, math.min(MAX_PEDS, math.floor(settings.pedsPerKm * trackKm() + 0.5)))
 end
 local function effectivePedCount() return hostSettings and hostSettings.pedCount or ownPedCount() end
+-- the ped group: the host's (by its key's hash; one this client's data doesn't have means all peds)
+local function effectiveGroupKey()
+  if not hostSettings then return settings.pedGroup end
+  for _, g in ipairs(data and data.groups or {}) do if rng.hash(g.key) == hostSettings.groupHash then return g.key end end
+  return 'all'
+end
 local function effectiveRespawn() return hostSettings and hostSettings.respawnSeconds or settings.respawnSeconds end
 local function effectiveRun()
   if hostSettings then return hostSettings.runSpeed, hostSettings.runDistance end
@@ -657,7 +683,10 @@ end
 
 local function showAward(sid, credits, bannerDef)
   if sid ~= carSid(sim.focusedCar) then return end
-  if credits > 0 then popups[#popups + 1] = {text = ('+%d'):format(credits), time = os.preciseClock() * 1000} end
+  if credits > 0 then popups[#popups + 1] = {text = ('+%d'):format(credits), time = os.preciseClock() * 1000}
+  elseif credits < 0 then
+    popups[#popups + 1] = {text = ('%d RECOVERY'):format(credits), time = os.preciseClock() * 1000, colour = {1, 0.25, 0.15}}
+  end
   if bannerDef then scoring.queueBanner(bannerQueue, bannerDef) end
 end
 
@@ -762,7 +791,7 @@ local function sayHello(force)
   lastHello = now
   sendHello({pedCount = ownPedCount(), respawnSeconds = settings.respawnSeconds,
     runSpeed = math.floor(settings.runSpeed * 100 + 0.5), runDistance = math.floor(settings.runDistance * 100 + 0.5),
-    version = 3}, true)
+    pedGroup = rng.hash(settings.pedGroup or 'all'), version = 4}, true)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -772,6 +801,8 @@ local function rebuild(T)
   pedlogic.gibs = {}
   bloodTrails, popups, bannerQueue = {}, {}, {}
   scores = {}
+  -- the cars' combo and stunt timing too (from another time: after a restart a stunt was refused as too soon)
+  for _, c in pairs(cars) do c.state = scoring.newCarState() end
   for _, ped in ipairs(peds) do
     pedlogic.respawn(ped, 0)
     ped.anchor = {t0 = 0, s0 = ped.initialS, dir0 = ped.initialDir}
@@ -810,7 +841,28 @@ end
 -- ---------------------------------------------------------------------------------------------
 -- Car-side bonuses: piledriver, 'Nice shot, sir!' (decided by the client deciding for the car)
 local function scoreEvent(c, credits, bannerDef)
-  if credits > 0 then emit(events.score(clockT, c.sid, credits, bannerDef and bannerDef.index)) end
+  if credits ~= 0 then emit(events.score(clockT, c.sid, credits, bannerDef and bannerDef.index)) end
+end
+
+-- Resets (AC's back to the pits, CSP's to the road or in place) cost what C1's recovery costs at its hardest skill
+-- level: like C1's, they repair the car. Not before the start, nor in the first seconds of a (re)started session.
+local jumpHooked, jumped = {}, {}
+local liveSince = nil  -- clock when this run of the session began
+local RESET_GRACE = 3000  -- ms
+local function hookJumps()
+  if not ac.onCarJumped then return end
+  for i = 0, sim.carsCount - 1 do
+    if not jumpHooked[i] then
+      jumpHooked[i] = true
+      ac.onCarJumped(i, function() jumped[i] = true end)
+    end
+  end
+end
+local function chargeResets(c)
+  if not jumped[c.index] then return end
+  jumped[c.index] = nil
+  if clockT <= 0 or not liveSince or clockT - liveSince < RESET_GRACE then return end
+  scoreEvent(c, -(data.recoveryCost or c1data.DEFAULT_RECOVERY_COST), nil)
 end
 
 local RICOCHET_MS, NICE_SHOT_SLIP, NICE_SHOT_YAW = 2000, 20, 1.5  -- ms; degrees; rad/s
@@ -1065,12 +1117,12 @@ local function describePlacement()
   data.mapInfo = table.concat(parts, ' ')
   log(data.mapInfo)
 end
-local populatedCount
+local populatedCount, populatedGroup
 
 local function startPopulating()
   peds, pedsById = {}, {}
-  populatedCount = effectivePedCount()
-  populating = coroutine.create(function() return populateTask(populatedCount) end)
+  populatedCount, populatedGroup = effectivePedCount(), effectiveGroupKey()
+  populating = coroutine.create(function() return populateTask(populatedCount, populatedGroup) end)
 end
 
 -- Maps without an AI line: explore their drivable ground first (once), then place the peds.
@@ -1138,16 +1190,16 @@ function script.update(dt)
   -- online: hellos, and the host's settings
   if online and not sendEvents then
     mySid = carSid(0)
-    sendEvents, sendEventsData = ac.OnlineEvent(events.layout(ac.StructItem, events.PER_MESSAGE, {ac.StructItem.key('carmapeds.events.v2')}),
+    sendEvents, sendEventsData = ac.OnlineEvent(events.layout(ac.StructItem, events.PER_MESSAGE, {ac.StructItem.key('carmapeds.events.v3')}),
       function(sender, msg)
         if sender and sender.index == 0 then return end  -- our own, back from the server
         for i = 0, events.PER_MESSAGE - 1 do
           if msg.kind[i] ~= 0 then receive(events.read(msg, i)) end
         end
       end)
-    sendHello = ac.OnlineEvent({ac.StructItem.key('carmapeds.hello.v2'), pedCount = ac.StructItem.uint16(),
+    sendHello = ac.OnlineEvent({ac.StructItem.key('carmapeds.hello.v3'), pedCount = ac.StructItem.uint16(),
       respawnSeconds = ac.StructItem.uint16(), runSpeed = ac.StructItem.uint16(), runDistance = ac.StructItem.uint16(),
-      version = ac.StructItem.uint16()}, function(sender, msg)
+      pedGroup = ac.StructItem.uint32(), version = ac.StructItem.uint16()}, function(sender, msg)
         if not sender or sender.index == 0 then return end
         presence[sender.sessionID] = os.preciseClock()
         -- the host's ped count, respawn time and running apply to everyone (ped ids must match)
@@ -1156,7 +1208,7 @@ function script.update(dt)
           for sid in pairs(presence) do if present(sid) and sid < sender.sessionID then host = false end end
           if host then
             hostSettings = {pedCount = msg.pedCount, respawnSeconds = msg.respawnSeconds,
-              runSpeed = msg.runSpeed / 100, runDistance = msg.runDistance / 100}
+              runSpeed = msg.runSpeed / 100, runDistance = msg.runDistance / 100, groupHash = msg.pedGroup}
           end
         end
       end)
@@ -1164,7 +1216,8 @@ function script.update(dt)
   end
   sayHello(false)
   if hostSettings and amHost() then hostSettings = nil end
-  if effectivePedCount() ~= populatedCount then startPopulating() return end
+  if effectivePedCount() ~= populatedCount or effectiveGroupKey() ~= populatedGroup then startPopulating() return end
+  hookJumps()
   pedlogic.runSpeedScale, pedlogic.runDistanceScale = effectiveRun()
 
   -- the clock
@@ -1185,15 +1238,18 @@ function script.update(dt)
       sessionIndex = sim.currentSessionIndex
       eventLog = events.newLog()
       simT = nil
+      liveSince = nil
     elseif simT and raw < simT - 1000 and not wasReplaying then
       -- the live clock went back: the session was restarted. A fresh start too (else the old run's kills would
       -- happen again on the same schedule)
       eventLog = events.newLog()
       simT = nil
+      liveSince = nil
     end
   end
   wasReplaying = replaying
   clockT = raw
+  if not liveSince or replaying then liveSince = math.max(0, clockT) end
   nowMs = clockT
   if sim.isPaused and not replaying then return end
 
@@ -1233,9 +1289,11 @@ function script.update(dt)
         local credits, b = scoring.updateStunt(c.state, {upY = c.upY, teleported = c.teleported,
           onGround = gy ~= nil and c.y - c.halfH - gy < 0.6}, clockT)
         scoreEvent(c, credits, b)
+        chargeResets(c)
       end
     end
   end
+  jumped = {}  -- resets of cars decided elsewhere (or while replaying) aren't charged here
   for _, c in ipairs(carList) do updateBlood(c) end
   pedlogic.updateGibs(clockT, math.min(dt, 0.1) * 1000)
   if not replaying then writeReplay() end
@@ -1279,10 +1337,10 @@ local bloodCall = {
   directValuesExchange = true,
   cacheKey = 2,
   textures = {},
-  values = {gAlpha = 1},
+  values = {gAlpha = 1, gBlood = vec3(0.35, 0, 0)},  -- gBlood: the splats' colour once the data is loaded
   shader = [[
     float4 main(PS_IN pin) {
-      float3 col = pow(float3(0.35, 0.0, 0.0), USE_LINEAR_COLOR_SPACE ? 2.2 : 1) * gWhiteRefPoint;
+      float3 col = pow(max(0, gBlood), USE_LINEAR_COLOR_SPACE ? 2.2 : 1) * gWhiteRefPoint;
       return pin.ApplyFog(float4(col, 0.8 * gAlpha));
     }
   ]],
@@ -1327,6 +1385,7 @@ render.on('main.track.transparent', function()
   if settings.mirrorSprites then camRight:scale(-1) end
 
   -- blood trails: thin quads on the ground
+  if data and data.bloodColour then bloodCall.values.gBlood:set(data.bloodColour[1], data.bloodColour[2], data.bloodColour[3]) end
   for _, t in ipairs(bloodTrails) do
     if (t[1] - cam.x) ^ 2 + (t[3] - cam.z) ^ 2 < maxD2 then
       local dx, dz = t[4] - t[1], t[6] - t[3]
@@ -1413,7 +1472,8 @@ function script.fullscreenUI()
     if t < 1500 then
       ui.pushDWriteFont('Segoe UI;Weight=Bold')
       ui.setCursor(vec2(screen.x - 420, 60 + (i - 1) * 4 - t / 30))
-      ui.dwriteTextAligned(p.text, 26, ui.Alignment.End, ui.Alignment.Start, vec2(400, 34), false, rgbm(1, 1, 1, 1 - t / 1500))
+      local col = p.colour or {1, 1, 1}
+      ui.dwriteTextAligned(p.text, 26, ui.Alignment.End, ui.Alignment.Start, vec2(400, 34), false, rgbm(col[1], col[2], col[3], 1 - t / 1500))
       ui.popDWriteFont()
       keep[#keep + 1] = p
     end
@@ -1465,11 +1525,35 @@ function script.windowSettings(dt)
     if v ~= settings[key] then settings[key] = v end
   end
   if hostSettings then
-    ui.textWrapped(('Pedestrians, respawn time and running come from the host: %d, %d s, speed %d%%, distance %d%%.')
-      :format(hostSettings.pedCount, hostSettings.respawnSeconds, hostSettings.runSpeed * 100, hostSettings.runDistance * 100))
+    local g = pedGroup(effectiveGroupKey())
+    ui.textWrapped(('Pedestrians, respawn time and running come from the host: %d (%s), %d s, speed %d%%, distance %d%%.')
+      :format(hostSettings.pedCount, g and g.label or 'all', hostSettings.respawnSeconds, hostSettings.runSpeed * 100,
+        hostSettings.runDistance * 100))
   else
-    slider('pedsPerKm', 'Pedestrians per km: %.0f', 5, 200, 1, true)
-    ui.textWrapped(('%d on this track (%.1f km; at most %d)'):format(ownPedCount(), trackKm(), MAX_PEDS))
+    if ui.checkbox('No pedestrians (scoring stays on: cunning stunts, reset costs)', settings.pedsOff) then
+      settings.pedsOff = not settings.pedsOff
+    end
+    if not settings.pedsOff then
+      slider('pedsPerKm', 'Pedestrians per km: %.1f', 0, 200, 1)
+      ui.textWrapped(('%d on this track (%.1f km; at most %d). Turned down, the flagman and grid girls go last.')
+        :format(ownPedCount(), trackKm(), MAX_PEDS))
+      -- which peds: all, or those of a group of C1's races (arrows step through them)
+      local choices = {{key = 'all', label = 'All pedestrians'}}
+      for _, g in ipairs(data and data.groups or {}) do choices[#choices + 1] = g end
+      local at = 1
+      for i, c in ipairs(choices) do if c.key == settings.pedGroup then at = i end end
+      if ui.button('<##pedGroup') then settings.pedGroup = choices[(at - 2) % #choices + 1].key end
+      ui.sameLine()
+      if ui.button('>##pedGroup') then settings.pedGroup = choices[at % #choices + 1].key end
+      ui.sameLine()
+      ui.textWrapped('Peds: ' .. choices[at].label)
+      if data and data.hasRobots then
+        if ui.checkbox('Robots (the German version\'s BORING.TXT; reloads)', settings.robots) then
+          settings.robots = not settings.robots
+          startLoading()
+        end
+      end
+    end
     slider('respawnSeconds', 'Respawn dead after: %.0f s (0 = never)', 0, 600, 1, true)
     slider('runSpeed', 'Scared peds run speed: %.0f%%', 50, 200, 100)
     slider('runDistance', 'Scared peds run distance: %.0f%%', 50, 300, 100)

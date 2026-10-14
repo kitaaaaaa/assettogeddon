@@ -115,6 +115,8 @@ return function(opts)
       return {getWorldTransformationRaw = function() return m or nil end}
     end,
     getDriverName = function(i) return 'Driver ' .. i end,
+    -- car resets: H.jump(i) calls them as CSP does when car i is teleported (pits, road, in place)
+    onCarJumped = function(i, cb) H.jumpCallbacks[i] = H.jumpCallbacks[i] or {} table.insert(H.jumpCallbacks[i], cb) end,
     StructItem = S,
     AudioEvent = {fromFile = function(params)
       H.audioCreated = H.audioCreated + 1
@@ -243,6 +245,8 @@ return function(opts)
     dofile('carmapeds.lua')
   end
   function H.state() return __carmapedsTest.state() end
+  H.jumpCallbacks = {}
+  function H.jump(i) for _, cb in ipairs(H.jumpCallbacks[i] or {}) do cb(i) end end
 
   -- One frame of dt seconds. The session clock advances unless in a replay (the test sets the stream then).
   H.recording = {}

@@ -21,16 +21,24 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 
 ## What it does
 
-- **Pedestrians**: 60 per km of track by default (adjustable; at most 4000), on random spots: half on the track and
+- **Pedestrians**: 60 per km of track by default (adjustable down to none; at most 4000), on random spots: half on the track and
   just beside it, half anywhere on the surfaces cars can touch (grass, run-off, verges...) within 150 m of it,
   where the ground is flat enough. Where surfaces are stacked (a road in a tunnel, under a bridge), peds go on
   every layer with at least 2 m of headroom; on-track ones on the racing line's own layer. Maps without an AI
   line (free roam maps, conversions) are explored once at load: from the car spawn points, in 20 m steps (10 m where that fails) over
   connected ground (no walls in the way, at most a 30% climb, 2 m of headroom), so peds go along the roads, car
-  parks and tunnels the cars can reach, never on roofs; counted per km explored (up to 240 km). Maps split into several .kn5 files are explored across all of them. Every
-  pedestrian type in `DATA\PEDESTRN.TXT` except the hovering robot (ref 32, `RO1.PIX`), which doesn't fit
-  with the rest.  Placement comes from the track's name, so a track always gets the
-  same layout. 
+  parks and tunnels the cars can reach, never on roofs; counted per km explored (up to 240 km). Maps split into several .kn5 files are explored across all of them.
+  Placement comes from the track's name, so a track always gets the same layout. The count includes the flagman
+  and grid girls, who go last when it's turned down (with 9 on a track with 8 grid girls, they're the only
+  ones). **No pedestrians** turns them all off; scoring stays on (cunning stunts, reset costs).
+- **Which pedestrians**: all the types in `DATA\PEDESTRN.TXT`, or those of a group of Carmageddon's races, chosen
+  with the arrows in the settings. The app reads which peds each race places from the race files
+  (`DATA\RACES.TXT` and `DATA\RACES\*.TXT`), so each choice has the game's own mix: groups of races by their
+  track file names (the game's environments), then each race on its own. Online, the host's choice applies.
+- **Other versions of Carmageddon**: the German version's robots (`DATA\BORING.TXT`, and its `G*` gib sprites)
+  can be switched on in the settings when the data has them; the UK zombie version's data loads like the
+  original. Blood trails take the colour of the data's splat sprites (red, green, oil). (Preliminary: not yet
+  tried with those versions' files.)
 - **Flagman and Grid girls**:  Like Carmageddon, there's one bonus scoring flagman ped, standing beside the track at the start/finish line,
  waving his flag from the start of the session. ped 19 (`RID.PIX`), the flagman's counterpart, is never placed at random. Up to 8 of her stand
   at the starting grid, beside every second grid slot on the outside (at the pit boxes if the track has no
@@ -68,6 +76,9 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
     the original data). 
 
   Banners queue up and show one after another, 2 s each (up to 4 waiting).
+- **Resets cost credits**, as in C1, where recovering the car also repairs it: going back to the pits, or CSP's
+  reset to the road or in place, costs GENERAL.TXT's recovery cost for the hardest skill level (4000 in the
+  original data), shown in red under the credits. Not before the start, nor in a session's first 3 s.
 
 ## Approximations
 

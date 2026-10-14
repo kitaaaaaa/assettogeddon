@@ -14,6 +14,15 @@ M.GIB_NAMES = {
   {'HAND.PIX', 'CHUNK02.PIX', 'EYEBALL.PIX', 'COLON.PIX', 'CHUNK01.PIX'},
   {'CHUNK04.PIX', 'SPLAT1.PIX', 'CHUNK03.PIX', 'SPLAT2.PIX', 'SPLATOUT.PIX'},
 }
+-- the German version's robots (gPed_geb_names), used with BORING.TXT's peds where the data has them
+M.ROBOT_GIB_NAMES = {
+  [0] = {'GBIGGIBS.PIX', 'GBIGGIB2.PIX', 'GBIGGIB3.PIX'},
+  {'GELBOW.PIX', 'GPELVIS.PIX', 'GHEAD.PIX', 'GRIBS.PIX', 'GBONE.PIX'},
+  {'GHAND.PIX', 'GCHUNK02.PIX', 'GEYEBALL.PIX', 'GCOLON.PIX', 'GCHUNK01.PIX'},
+  {'GCHUNK04.PIX', 'GSPLAT1.PIX', 'GCHUNK03.PIX', 'GSPLAT2.PIX', 'GSPLATOT.PIX'},
+}
+M.DEFAULT_BLOOD = {0.35, 0, 0}
+M.DEFAULT_RECOVERY_COST = 4000  -- GENERAL.TXT's highest skill level, if the line isn't found
 M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX', '2XCOMBO.PIX', '3XCOMBO.PIX',
   '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX'}
 M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVING_BASTARD_REF)
@@ -24,20 +33,133 @@ M.FRAME_FIXES = {[19] = {['RIDSHK.PIX'] = 'RIDSHK1.PIX', ['RIDSTIL2.PIX'] = 'RID
 -- the race starts, then standing with it lowered (sequence 4). Never placed at random.
 M.GRID_GIRL = {ref = 19, signSequence = 8, standSequence = 4}
 -- Ped types never spawned: ref -> why
-M.EXCLUDED_REFS = {[32] = 'the hovering robot (RO1.PIX) does not fit with the rest'}
+M.EXCLUDED_REFS = {}
 
--- GENERAL.TXT's "Cunning stunt bonus for each skill level" line (three values), found by its comment.
-function M.cunningStuntCredits(text, method)
+-- A GENERAL.TXT line of three values (one per skill level), found by its comment.
+local function generalTriple(text, method, phrase)
   if not text then return nil end
   local r = c1text.reader(text, method)
   for l in function() return r:line() end do
-    if l:lower():find('cunning stunt', 1, true) then
+    if l:lower():find(phrase, 1, true) then
       local t = c1text.tokens(l)
       local a, b, c = tonumber(t[1]), tonumber(t[2]), tonumber(t[3])
       if a and b and c then return {a, b, c} end
     end
   end
   return nil
+end
+-- "Cunning stunt bonus for each skill level"
+function M.cunningStuntCredits(text, method) return generalTriple(text, method, 'cunning stunt') end
+-- "Recovery cost for each skill level": the highest (the hardest skill level)
+function M.recoveryCost(text, method)
+  local t = generalTriple(text, method, 'recovery cost for each skill')
+  return t and math.max(t[1], t[2], t[3]) or nil
+end
+
+local function trim(s) return (s:gsub('[ \t]+$', '')) end
+
+-- RACES.TXT: each race's name and track file, up to END (loading.c LoadRaces, SkipRestOfRace, LoadRaceInfo).
+function M.parseRaceList(text, method)
+  local r = c1text.reader(text, method)
+  local races = {}
+  while true do
+    local name = r:line()
+    if not name or trim(name) == 'END' then break end
+    r:line()  -- the scene, map and info images
+    local track = r:line()
+    local chunks = tonumber(c1text.firstToken(r:line() or '') or '')
+    if not track or not chunks then break end
+    for _ = 1, chunks do
+      r:line() r:line()
+      local n = tonumber(c1text.firstToken(r:line() or '') or '') or 0
+      for _ = 1, n do r:line() end
+    end
+    races[#races + 1] = {name = trim(name), file = c1text.firstToken(track)}
+  end
+  return races
+end
+
+-- The ped instructions in a race file and how many data lines follow each (pedestrn.c LoadInPedestrians)
+local INSTRUCTION_LINES = {point = 1, xpoint = 1, bchoice = 1, fchoice = 1, dead = 1, bmarker = 1, fmarker = 1,
+  baction = 1, faction = 1, reverse = 0}
+-- The pedestrian types a race places: {ref = count}, or nil and why. The ped section follows the groovidelics
+-- (world.c LoadTrack): from VERSION 4 a PEDSUBS.TXT index (only used in the low-memory mode), then the ped
+-- count and for each: ref, instruction count, initial instruction, the instructions.
+function M.parseRacePeds(text, method)
+  local r = c1text.reader(text, method)
+  local first = r:line()
+  if not first then return nil, 'empty' end
+  local t = c1text.tokens(first)
+  local version = t[1] == 'VERSION' and tonumber(t[2]) or 0
+  repeat
+    local l = r:line()
+    if not l then return nil, 'no END OF GROOVE line' end
+  until trim(l) == 'END OF GROOVE'
+  if version > 3 then r:line() end
+  local function int() local l = r:line() return l and tonumber(c1text.firstToken(l) or '') end
+  local count = int()
+  if not count then return nil, 'no pedestrian count' end
+  local refs = {}
+  for i = 1, count do
+    local ref, n = int(), int()
+    if not ref or not n or not int() then return nil, ('pedestrian %d of %d unreadable'):format(i, count) end
+    refs[math.floor(ref)] = (refs[math.floor(ref)] or 0) + 1
+    for _ = 1, n do
+      local l = r:line()
+      local k = l and INSTRUCTION_LINES[(c1text.firstToken(l) or ''):lower()]
+      if not k then return nil, ('pedestrian %d of %d: unknown instruction "%s"'):format(i, count, tostring(l)) end
+      for _ = 1, k do r:line() end
+    end
+  end
+  return refs
+end
+
+-- Groups of races for choosing which ped types appear: races are grouped by their track file name up to the
+-- first digit (the game's own naming of its environments' tracks); each race can be chosen on its own too.
+-- races: {{name, file, refs}}; returns {{key, label, refs = {ref = true}}}.
+function M.raceGroups(races)
+  local groups, byKey = {}, {}
+  for _, race in ipairs(races) do
+    if race.refs then
+      local prefix = (race.file or ''):upper():gsub('%..*$', ''):match('^(%a+)') or '?'
+      local g = byKey[prefix]
+      if not g then
+        g = {key = 'group:' .. prefix, prefix = prefix, refs = {}, races = {}}
+        byKey[prefix] = g
+        groups[#groups + 1] = g
+      end
+      g.races[#g.races + 1] = race.name
+      for ref in pairs(race.refs) do g.refs[ref] = true end
+    end
+  end
+  local out = {}
+  if #groups > 1 then
+    for _, g in ipairs(groups) do
+      g.label = ('%s tracks (%d race%s: %s)'):format(g.prefix, #g.races, #g.races == 1 and '' or 's',
+        table.concat(g.races, ', '))
+      out[#out + 1] = g
+    end
+  end
+  for _, race in ipairs(races) do
+    if race.refs then
+      local refs = {}
+      for ref in pairs(race.refs) do refs[ref] = true end
+      out[#out + 1] = {key = 'race:' .. (race.file or race.name):upper(), label = race.name .. ' (' .. tostring(race.file) .. ')', refs = refs}
+    end
+  end
+  return out
+end
+
+-- Average colour of an image's opaque pixels (rgba string), 0..1, or nil
+local function averageColour(img)
+  if not img or not img.rgba then return nil end
+  local r, g, b, n = 0, 0, 0, 0
+  local s = img.rgba
+  for i = 1, #s - 3, 4 do
+    if s:byte(i + 3) > 0 then r, g, b, n = r + s:byte(i), g + s:byte(i + 1), b + s:byte(i + 2), n + 1 end
+  end
+  if n == 0 then return nil end
+  return {r / n / 255, g / n / 255, b / n / 255}
 end
 
 -- Pixelmaps: the game looks in DATA/<resolution>/PIXELMAP, then DATA/PIXELMAP (loading.c LoadPixelmap).
@@ -48,7 +170,7 @@ function M.findDataDir(root, exists)
   root = (root or ''):gsub('[/\\]+$', '')
   if root == '' then return nil end
   for _, dir in ipairs({root .. '/DATA', root}) do
-    if exists(dir .. '/PEDESTRN.TXT') then return dir end
+    if exists(dir .. '/PEDESTRN.TXT') or exists(dir .. '/BORING.TXT') then return dir end
   end
   return nil
 end
@@ -56,8 +178,10 @@ end
 -- io: {read = function(path) -> string|nil, exists = function(path) -> bool, lastError = string (why the last
 -- read failed, optional)}; yield: optional, called now and
 -- then so a coroutine can spread the work over frames. Returns data or nil, error.
-function M.load(root, io, yield)
+-- opts.robots: the German version's robot peds (BORING.TXT, its G* gibs) where the data has them.
+function M.load(root, io, yield, opts)
   yield = yield or function() end
+  opts = opts or {}
   local data = M.findDataDir(root, io.exists)
   if not data then return nil, 'no DATA/PEDESTRN.TXT in "' .. tostring(root) .. '"' end
   local out = {dataDir = data, warnings = {}, notes = {}, images = {}}
@@ -66,6 +190,11 @@ function M.load(root, io, yield)
   local general = io.read(data .. '/GENERAL.TXT')
   out.method = c1text.detectMethod(general)
   out.cunningStunt = M.cunningStuntCredits(general, out.method)
+  out.recoveryCost = M.recoveryCost(general, out.method)
+  if not out.recoveryCost then
+    out.recoveryCost = M.DEFAULT_RECOVERY_COST
+    warn(('no "Recovery cost for each skill level" line in GENERAL.TXT: a reset costs %d'):format(out.recoveryCost))
+  end
   local palPath = data .. '/REG/PALETTES/DRRENDER.PAL'
   local pal = io.read(palPath)
   if not pal then
@@ -79,8 +208,13 @@ function M.load(root, io, yield)
     return nil, ('%s: unexpected contents (%d bytes, %d pixelmaps): %s'):format(palPath, #pal, #maps, preview)
   end
 
-  local pedText = io.read(data .. '/PEDESTRN.TXT')
-  if not pedText then return nil, ('can\'t read %s/PEDESTRN.TXT (%s)'):format(data, io.lastError or 'unknown error') end
+  -- the German version's robots: BORING.TXT instead of PEDESTRN.TXT (sausage_eater_mode)
+  out.hasRobots = io.exists(data .. '/BORING.TXT')
+  out.robots = out.hasRobots and (opts.robots or not io.exists(data .. '/PEDESTRN.TXT'))
+  local pedFile = out.robots and 'BORING.TXT' or 'PEDESTRN.TXT'
+  out.pedFile = pedFile
+  local pedText = io.read(data .. '/' .. pedFile)
+  if not pedText then return nil, ('can\'t read %s/%s (%s)'):format(data, pedFile, io.lastError or 'unknown error') end
   local peds, w = peddata.parse(pedText, out.method)
   for _, s in ipairs(w) do warn(s) end
 
@@ -168,9 +302,44 @@ function M.load(root, io, yield)
   out.gibs = {}
   for size = 0, 3 do
     out.gibs[size] = {}
-    for _, n in ipairs(M.GIB_NAMES[size]) do
+    for i, n in ipairs(M.GIB_NAMES[size]) do
+      local robot = M.ROBOT_GIB_NAMES[size][i]
+      if out.robots and image(robot) then n = robot end
       if image(n) then out.gibs[size][#out.gibs[size] + 1] = n else warn('gib image missing: ' .. n) end
     end
+  end
+  -- the blood trails take the splats' colour (red, a zombie's green, a robot's oil)
+  out.bloodColour = M.DEFAULT_BLOOD
+  do
+    local r, g, b, n = 0, 0, 0, 0
+    for _, name in ipairs(out.gibs[3]) do
+      if name:find('SPLAT', 1, true) then
+        local c = averageColour(image(name))
+        if c then r, g, b, n = r + c[1], g + c[2], b + c[3], n + 1 end
+      end
+    end
+    -- darkened: the splat sprites are lit, the trail is a stain on the road
+    if n > 0 then out.bloodColour = {r / n * 0.6, g / n * 0.6, b / n * 0.6} end
+  end
+
+  -- which ped types each race places (for choosing a Carmageddon environment's peds)
+  out.races, out.groups = {}, {}
+  local raceList = io.read(data .. '/RACES.TXT')
+  if raceList then
+    for _, race in ipairs(M.parseRaceList(raceList, out.method)) do
+      local text = race.file and io.read(data .. '/RACES/' .. race.file)
+      if text then
+        local refs, why = M.parseRacePeds(text, out.method)
+        if refs then race.refs = refs else warn(('race %s (%s): pedestrians not read: %s'):format(race.name, race.file, why)) end
+      else
+        warn(('race %s: no RACES/%s'):format(race.name, tostring(race.file)))
+      end
+      out.races[#out.races + 1] = race
+      yield()
+    end
+    out.groups = M.raceGroups(out.races)
+  else
+    out.notes[#out.notes + 1] = 'no RACES.TXT: only "all pedestrians" to choose from'
   end
   out.banners = {}
   for _, n in ipairs(M.BANNER_NAMES) do

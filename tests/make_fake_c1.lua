@@ -23,7 +23,8 @@ local D = root .. '/DATA'
 for _, d in ipairs({D, D .. '/REG/PALETTES', D .. '/SOUND', D .. '/64X48X8/PIXELMAP'}) do mkdir(d) end
 
 -- encrypted GENERAL.TXT first line, method 2 (doesn't decode to "0.01\t\t" with method 1)
-write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n2000,1500,500\t\t// Cunning stunt bonus for each skill level\r\n')
+write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n2000,1500,500\t\t// Cunning stunt bonus for each skill level\r\n'
+  .. '1000, 2000, 4000\t\t// Recovery cost for each skill level\r\n')
 
 local pal = {}
 for i = 0, 255 do pal[#pal + 1] = string.char(0, i, (i * 3) % 256, 255 - i) end
@@ -75,10 +76,39 @@ local n1 = #lines
 for i = 2, n0 - 1 do lines[#lines + 1] = lines[i] end
 lines[#lines + 1] = 'NEXT PEDESTRIAN'
 table.insert(lines, n1 + 1, '19')
+-- a second ordinary ped (ref 2): the same again
+local n2 = #lines
+for i = 2, n0 - 1 do lines[#lines + 1] = lines[i] end
+lines[#lines + 1] = 'NEXT PEDESTRIAN'
+table.insert(lines, n2 + 1, '2')
 lines[#lines + 1] = 'END OF PEDESTRIANS'
 -- encrypt every other line, as the real files mix both
 for i = 2, #lines, 2 do lines[i] = '@' .. c1text.decode(lines[i], 2) end
 write(D .. '/PEDESTRN.TXT', table.concat(lines, '\r\n') .. '\r\n')
+-- the German version's robots: BORING.TXT (the same peds here)
+write(D .. '/BORING.TXT', table.concat(lines, '\r\n') .. '\r\n')
+
+-- two races: a town (peds 1, the flagman and grid girl) and a mine (ped 2), as in the game's race files
+mkdir(D .. '/RACES')
+write(D .. '/RACES.TXT', table.concat({
+  '// race list', 'Town Race', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'TOWNA1.TXT', '1', '10,20', '0,100', '2', 'Some', 'text',
+  'Mine Race', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'MINEA1.TXT', '0',
+  'Mine Again', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'MINEB2.TXT', '0', 'END'}, '\r\n') .. '\r\n')
+local function raceFile(refs)
+  local l = {'VERSION 6', '// lots of track data', '4, 5, 6', 'something.ACT', 'START OF FUNK', 'END OF FUNK',
+    'START OF GROOVE', 'some', 'NEXT GROOVE', 'groove', 'END OF GROOVE', '-1', '// pedestrians', tostring(#refs)}
+  for _, ref in ipairs(refs) do
+    for _, x in ipairs({tostring(ref), '6', '1', 'point', '1.0, 2.0, 3.0', 'xpoint', '1, 2, 3', 'fchoice',
+        '1, 0, 100, 1', 'dead', '2', 'fmarker', '1', 'reverse'}) do l[#l + 1] = x end
+  end
+  l[#l + 1] = 'START OF OPPONENT PATHS'
+  -- encrypted lines too
+  for i = 3, #l, 3 do l[i] = '@' .. c1text.decode(l[i], 2) end
+  return table.concat(l, '\r\n') .. '\r\n'
+end
+write(D .. '/RACES/TOWNA1.TXT', raceFile({1, 1, 99, 19}))
+write(D .. '/RACES/MINEA1.TXT', raceFile({2, 2}))
+write(D .. '/RACES/MINEB2.TXT', raceFile({2, 1}))
 
 local P = D .. '/64X48X8/PIXELMAP/'
 -- as in the real data, all of a ped's frames are named pixelmaps in one file (PED.PIX); names stored
@@ -90,5 +120,7 @@ end
 write(P .. 'PED.PIX', chunk(0x12, be32(2) .. be32(2)) .. table.concat(maps))
 write(P .. 'DIE4.PIX', pixFile(24, 48, 5, 'DIE4.PIX'))
 for size = 0, 3 do for _, n in ipairs(c1data.GIB_NAMES[size]) do write(P .. n, pixFile(16, 16, 9)) end end
+-- one robot gib, a different colour
+write(P .. 'GSPLAT1.PIX', pixFile(16, 16, 200))
 for _, n in ipairs(c1data.BANNER_NAMES) do write(P .. n, pixFile(128, 24, 12)) end
 print('fake C1 data written to ' .. root)

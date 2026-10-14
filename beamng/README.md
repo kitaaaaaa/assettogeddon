@@ -35,6 +35,8 @@ version of the parts of Custom Shaders Patch's Lua API it uses:
   face the camera, 30 times a second.
 - **Sounds**: Carmageddon's own WAV files, louder the closer they are (no left/right panning yet: BeamNG's game
   Lua has no documented way to play a file at a position).
+- **Resets**: BeamNG's vehicle resets (to the spawn point, reset and move the spawn point) cost the recovery
+  cost, as AC's do.
 - **Window and HUD**: imgui. Settings are saved in `settings/carmapeds.json`.
 
 ## Not in this version

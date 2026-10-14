@@ -241,5 +241,62 @@ deadAfter = 0
 for _, p in ipairs(H.state().peds) do if p.hitPoints < 0 then deadAfter = deadAfter + 1 end end
 check(deadAfter == 0, 'restart: the old run\'s kills don\'t come back: ' .. deadAfter .. ' dead')
 
+-- resets cost the recovery cost at C1's hardest skill level (GENERAL.TXT: 4000), shown as a popup; not before the
+-- start or in a session's first seconds
+local function creditsOf(i) local sc = H.state().scores[i] return sc and sc.credits or 0 end
+do
+  local c0 = creditsOf(0)
+  H.jump(0) H.frame()
+  check(creditsOf(0) - c0 == -4000, 'a reset costs 4000: ' .. (creditsOf(0) - c0))
+  local popup = false
+  for _, ev in ipairs(H.state().log.list) do if ev.kind == 4 and ev.n == -4000 then popup = true end end
+  check(popup, 'the reset is a SCORE event of -4000')
+  H.sim.timeToSessionStart = 3000 for _ = 1, 5 do H.frame() end  -- restarted: before the start
+  c0 = creditsOf(0)
+  H.jump(0) H.frame()
+  check(creditsOf(0) == c0, 'no reset cost before the start')
+  for _ = 1, 200 do H.frame() end  -- just after the start
+  H.jump(0) H.frame()
+  check(creditsOf(0) == c0, 'no reset cost in the first seconds')
+end
+
+-- turned down, the flagman and grid girls are the last peds (this track: the flagman and 5 grid girls)
+local function pedsWith(total, extra)
+  H.storage.pedsPerKm = total / 2
+  for k, v in pairs(extra or {}) do H.storage[k] = v end
+  for _ = 1, 400 do H.frame() end
+  local n, special = 0, 0
+  for _, p in ipairs(H.state().peds) do n = n + 1 if p.flagman or p.gridGirl then special = special + 1 end end
+  return n, special
+end
+do
+  local n, special = pedsWith(6)
+  check(n == 6 and special == 6, ('6 peds: only the flagman and the grid girls (%d, %d special)'):format(n, special))
+  n, special = pedsWith(9)
+  check(n == 9 and special == 6, ('9 peds: the flagman, the grid girls and 3 more (%d, %d special)'):format(n, special))
+  n, special = pedsWith(3)
+  local flagman = false
+  for _, p in ipairs(H.state().peds) do if p.flagman then flagman = true end end
+  check(n == 3 and special == 3 and flagman, ('3 peds: the flagman and 2 grid girls (%d, %d special)'):format(n, special))
+  n = pedsWith(50, {pedsOff = true})
+  check(n == 0, 'peds off: none: ' .. n)
+  -- scoring still on: a cunning stunt pays
+  local c1 = H.cars[1]
+  H.placeCar(1, 0, -200, 0, 0) H.frame()  -- on the track
+  local before = creditsOf(1)
+  c1.up:set(0, -1, 0) for _ = 1, 30 do H.frame() end
+  c1.up:set(0, 1, 0) for _ = 1, 60 do H.frame() end
+  check(creditsOf(1) - before == 1500, 'peds off: cunning stunts still pay: ' .. (creditsOf(1) - before))
+  -- a ped group: only its types at random (the mine races: ref 2)
+  n = pedsWith(200, {pedsOff = false, pedGroup = 'group:MINEA'})
+  local wrong = 0
+  for _, p in ipairs(H.state().peds) do if not p.flagman and not p.gridGirl and p.def.ref ~= 2 then wrong = wrong + 1 end end
+  check(n == 200 and wrong == 0, ('mine group: only ref 2 at random (%d peds, %d others)'):format(n, wrong))
+  n = pedsWith(200, {pedGroup = 'group:TOWNA'})
+  wrong = 0
+  for _, p in ipairs(H.state().peds) do if not p.flagman and not p.gridGirl and p.def.ref ~= 1 then wrong = wrong + 1 end end
+  check(wrong == 0, 'town group: only ref 1 at random: ' .. wrong .. ' others')
+end
+
 print(failures == 0 and 'smoke test passed' or (failures .. ' failure(s)'))
 os.exit(failures == 0 and 0 or 1)
