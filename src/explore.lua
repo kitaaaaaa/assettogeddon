@@ -22,6 +22,7 @@ M.MAX_STREAK = 1500 -- stop after this many failed attempts in a row (the ground
 M.MAX_HOPS = 30     -- a step onto explored ground carries on from there, this many times (300 m)
 M.RETIRE = 3        -- a point whose steps fail every way this many times stops growing
 M.TRIES_PER_NODE = 8 -- and after this many attempts per point wanted
+M.CLIP = nil        -- {min = {x, z}, max = {x, z}}: only explore inside this box (BeamNG's ped area), or nil
 
 local function ground(ray, x, fromY, z, depth)
   local d = ray(x, fromY, z, 0, -1, 0, depth)
@@ -37,6 +38,8 @@ local function reject(why) rejected[why] = (rejected[why] or 0) + 1 return nil, 
 
 local function step(ray, n, dx, dz, len)
   local x, z = n.x + dx * len, n.z + dz * len
+  local c = M.CLIP
+  if c and (x < c.min.x or x > c.max.x or z < c.min.z or z > c.max.z) then return reject('outside the area') end
   local y = ground(ray, x, n.y + M.CLIMB, z, M.CLIMB * 2)
   if not y then return reject('no ground') end
   local rise = y - n.y
@@ -106,8 +109,10 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
       active[#active] = nil
     end
   end
+  local c = M.CLIP
   for _, s in ipairs(seeds) do
-    if not crowded(s.x, s.z) then add({x = s.x, y = s.y, z = s.z, fx = 0, fz = 1}) end
+    local inside = not c or (s.x >= c.min.x and s.x <= c.max.x and s.z >= c.min.z and s.z <= c.max.z)
+    if inside and not crowded(s.x, s.z) then add({x = s.x, y = s.y, z = s.z, fx = 0, fz = 1}) end
   end
   if #nodes == 0 then return nodes end
   -- where targets are aimed: the map's extent if known, and always REACH beyond the ground found so far (so
@@ -121,6 +126,10 @@ function M.run(rand, rawRay, seeds, bounds, maxNodes, yield)
     if bounds then
       x0, x1 = math.min(x0, bounds.min.x), math.max(x1, bounds.max.x)
       z0, z1 = math.min(z0, bounds.min.z), math.max(z1, bounds.max.z)
+    end
+    if c then  -- clipped: aim within the box
+      x0, x1 = math.max(x0, c.min.x), math.min(x1, c.max.x)
+      z0, z1 = math.max(z0, c.min.z), math.min(z1, c.max.z)
     end
     return x0, x1, z0, z1
   end

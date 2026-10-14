@@ -146,6 +146,21 @@ do
   check(far > 7000, ('unknown extent: spreads out (farthest %.1f km from the start, the edge is 10)'):format(far / 1000))
 end
 
+-- clipped to a box (BeamNG's ped area): every point inside it, and it covers it
+do
+  local open = world(function(x, z) return math.abs(x) < 10000 and math.abs(z) < 10000 end)
+  explore.CLIP = {min = {x = 1000, z = -500}, max = {x = 2000, z = 500}}
+  local pts = explore.run(rng.new(9), open, {{x = 0, y = 0, z = 0}, {x = 1500, y = 0, z = 0}}, nil, 3000)
+  explore.CLIP = nil
+  local out, x0, x1 = 0, math.huge, -math.huge
+  for _, n in ipairs(pts) do
+    if n.x < 1000 or n.x > 2000 or n.z < -500 or n.z > 500 then out = out + 1 end
+    x0, x1 = math.min(x0, n.x), math.max(x1, n.x)
+  end
+  check(#pts > 1000 and out == 0, ('clipped: %d points, %d outside the box'):format(#pts, out))
+  check(x0 < 1100 and x1 > 1900, ('clipped: covers the box (x %.0f..%.0f)'):format(x0, x1))
+end
+
 -- the same inputs give the same points (every client builds the same peds)
 local a = explore.run(rng.new(3), roads, {{x = 0, y = 0, z = 0}}, bounds, 300)
 local b = explore.run(rng.new(3), roads, {{x = 0, y = 0, z = 0}}, bounds, 300)

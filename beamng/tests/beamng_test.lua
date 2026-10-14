@@ -29,9 +29,9 @@ local logs = {}
 function log(level, tag, msg) logs[#logs + 1] = level .. ' ' .. tostring(msg) end
 function jsonEncode(v) local t = {} for k, x in pairs(v) do t[#t + 1] = tostring(k) .. '=' .. tostring(x) end table.sort(t) return table.concat(t, ',') end
 -- scared peds barely run here, so the car (driving dead straight, never steering at them) hits some
-local savedSettings = {runSpeed = 0.1, runDistance = 0.5}
-function jsonReadFile() return savedSettings end
-function jsonWriteFile(_, v) savedSettings = v end
+local savedFiles = {['/settings/carmapeds.json'] = {runSpeed = 0.1, runDistance = 0.5}}
+function jsonReadFile(p) return savedFiles[p] end
+function jsonWriteFile(p, v) savedFiles[p] = v end
 function getCurrentLevelIdentifier() return 'mock_level' end
 -- package.path the way the game sets it up (relative to the virtual root): here, relative to the build folder
 package.path = BUILD .. '/lua/?.lua;' .. package.path
@@ -47,7 +47,9 @@ bv.__add = function(a, b) return vec3(a.x + b.x, a.y + b.y, a.z + b.z) end
 bv.__sub = function(a, b) return vec3(a.x - b.x, a.y - b.y, a.z - b.z) end
 
 -- the level: flat ground at z = 0 in a 120 m wide strip, 3 km long, around a road along y (x = 0): the road graph
+local rays = 0
 function castRayStatic(pos, dir, len)
+  rays = rays + 1
   if dir.z < -0.99 and math.abs(pos.x) < 60 and math.abs(pos.y) < 1500 and pos.z >= 0 and pos.z <= len then return pos.z end
   return len
 end
@@ -84,7 +86,11 @@ core_camera = {getPosition = function() return camPos end, getForward = function
 
 -- scene objects: materials and the procedural mesh
 local created, meshes, materialsMade = {}, {}, {}
-scenetree = {MissionGroup = {add = function() end}}
+-- a lake beside the road (a WaterBlock, x 20..60, y -500..-300, surface at z = 0.5): the ground there is under water
+local lake = {getWorldBox = function() return {minExtents = vec3(20, -500, -3), maxExtents = vec3(60, -300, 0.5)} end}
+scenetree = {MissionGroup = {add = function() end},
+  findClassObjects = function(class) return class == 'WaterBlock' and {'lake'} or {} end,
+  findObject = function(name) return name == 'lake' and lake or nil end}
 function createObject(class)
   local o = {class = class, fields = {}}
   function o:setField(k, _, v) self.fields[k] = v end
@@ -131,12 +137,15 @@ end
 print(('placed after %d frames (%.1f s at 60 fps)'):format(frames, frames / 60))
 check(placed ~= nil, 'peds placed')
 -- drive the player's car up the road through the peds at 20 m/s for 40 s, the camera behind it
+local rays0, t0, meshes0 = rays, os.clock(), #meshes
 for _ = 1, 2400 do
   player.pos = vec3(player.pos.x, player.pos.y + 20 * dt, 0.7)
   player.vel = vec3(0, 20, 0)
   camPos = vec3(0, player.pos.y - 10, 2)
   ext.onUpdate(dt, dt)
 end
+print(('while driving: %.1f raycasts and %.2f ms of Lua per frame, %.1f mesh rebuilds per s'):format((rays - rays0) / 2400,
+  (os.clock() - t0) * 1000 / 2400, (#meshes - meshes0) / 40))
 local errors = 0
 for _, l in ipairs(logs) do if l:find('^E ') then errors = errors + 1 print('log: ' .. l) end end
 for _, l in ipairs(logs) do if l:find('explored') or l:find('placed') or l:find('pedestrians') then print('log: ' .. l) end end
@@ -190,7 +199,22 @@ for _, lod in ipairs(meshes[#meshes]) do
     if math.abs(lo) < 0.01 and math.abs(hi - 1.725) < 0.01 then standing = standing + #sm.verts / 4 end
   end
 end
-check(standing > 50, 'standing peds drawn upright on the ground: ' .. standing)
+check(standing > 20, 'standing peds drawn upright on the ground: ' .. standing)
+-- the ped area: by default a 1 km square around the middle of the road network (0, 0) (peds go a few metres around
+-- the explored points, so 20 m of leeway); none in the lake
+local outside, wet, n = 0, 0, 0
+for _, p in ipairs(__carmapedsTest.state().peds) do
+  n = n + 1
+  local x, y = p.path.x[1], p.path.z[1]  -- AC (x, z) = BeamNG (x, y)
+  if math.abs(x) > 520 or math.abs(y) > 520 then outside = outside + 1 end
+  if x > 20 and x < 60 and y > -500 and y < -300 then wet = wet + 1 end
+end
+print(('%d peds, %d outside the area, %d in the lake'):format(n, outside, wet))
+check(n > 100 and outside == 0, 'peds only in the area')
+check(wet == 0, 'no peds in the water')
+local tested = false
+for _, l in ipairs(logs) do if l:find('self-test', 1, true) then tested = true print('log: ' .. l) end end
+check(tested, 'sprite mesh self-test ran')
 ext.onClientEndMission()
 check(created[#created] and true, 'objects created')
 os.execute('rm -rf "' .. TMP .. '"')

@@ -16,7 +16,8 @@ local APP_DIR = '/lua/ge/extensions/carmapeds/'   -- app.lua and src/*.lua
 local DATA_ROOT = '/carmapeds_data'                 -- the user's copy of Carmageddon's DATA folder goes in here
 local TEMP_DIR = '/temp/carmapeds/'                 -- generated textures
 local SETTINGS_FILE = '/settings/carmapeds.json'
-local MESH_HZ = 30                                  -- how often the ped mesh is rebuilt
+local AREA_FILE = '/settings/carmapeds_beamng.json' -- the ped area (BeamNG only)
+local MESH_HZ = 20                                  -- how often the ped mesh is rebuilt
 
 local function clock() return (os.clockhp and os.clockhp() or os.clock()) end
 
@@ -99,7 +100,14 @@ local imageCount = 0
 local audios = {}       -- playing one-shot sounds (for isValid)
 local roadNodes         -- sorted road graph node positions (BeamNG axes), for exploration seeds and the map extent
 local windowOpen = true
-local appError
+local errors = {}       -- the app's errors: {text, count}, newest last (shown in the window)
+local appError          -- set when the app can't start
+local drawPeds = true
+-- what each second costs (shown in the window): ms of Lua in the app, collecting and building the mesh; raycasts
+local stats = {t0 = 0, update = 0, collect = 0, mesh = 0, rays = 0, quads = 0, frames = 0}
+local shown = {}
+local meshBlocks             -- the self-test: does the sprite mesh block raycasts (has collision)? nil: not run yet
+local selfTestQuads          -- quads of the last mesh, for that test
 
 local function logf(level, ...)
   local t = {}
@@ -114,6 +122,8 @@ local function loadStorage(defaults)
   storage = {}
   for k, v in pairs(defaults) do storage[k] = v end
   for k, v in pairs(saved) do if defaults[k] ~= nil and type(v) == type(defaults[k]) then storage[k] = v end end
+  -- BeamNG's levels are big and open: a shorter draw distance than AC's unless chosen
+  if saved.drawDistance == nil and storage.drawDistance then storage.drawDistance = math.min(storage.drawDistance, 150) end
   storageSaved = jsonEncode and jsonEncode(storage) or ''
   return storage
 end
@@ -144,15 +154,131 @@ local function getRoadNodes()
   return roadNodes
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- The ped area: a square around the middle of the map (the extent of its road network), or a spot chosen in the
+-- window; peds only go inside it (BeamNG's levels are far too big to spread them over all of it)
+local area = {half = 500}  -- half the square's side, m; cx, cy: its centre (BeamNG x, y), nil for the map's middle
+do
+  local saved = jsonReadFile and jsonReadFile(AREA_FILE)
+  if type(saved) == 'table' then
+    if type(saved.half) == 'number' then area.half = saved.half end
+    if type(saved.cx) == 'number' and type(saved.cy) == 'number' then area.cx, area.cy = saved.cx, saved.cy end
+  end
+end
+local function mapMiddle()
+  local nodes = getRoadNodes()
+  if #nodes == 0 then return 0, 0 end
+  local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
+  for _, n in ipairs(nodes) do x0, x1, y0, y1 = math.min(x0, n.x), math.max(x1, n.x), math.min(y0, n.y), math.max(y1, n.y) end
+  return (x0 + x1) / 2, (y0 + y1) / 2
+end
+local function areaCentre()
+  if area.cx then return area.cx, area.cy end
+  return mapMiddle()
+end
+local function inArea(x, y)
+  local cx, cy = areaCentre()
+  return math.abs(x - cx) <= area.half and math.abs(y - cy) <= area.half
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Water: static raycasts go through it to the bottom, so ground under a water surface counts as no ground (no
+-- peds in lakes, rivers or the sea). WaterPlane: everything below its height; WaterBlock: its box; River: its
+-- surface triangles (in a 50 m grid).
+local water
+local RIVER_CELL = 50
+local function loadWater()
+  water = {planes = {}, blocks = {}, rivers = {}}
+  local function each(class, fn)
+    local ok, names = pcall(function() return scenetree.findClassObjects(class) end)
+    if not ok or not names then return end
+    for _, n in ipairs(names) do
+      local o = scenetree.findObject(n)
+      if o then pcall(fn, o) end
+    end
+  end
+  each('WaterPlane', function(o) water.planes[#water.planes + 1] = o:getPosition().z end)
+  each('WaterBlock', function(o)
+    local b = o:getWorldBox()
+    water.blocks[#water.blocks + 1] = {x0 = b.minExtents.x, x1 = b.maxExtents.x, y0 = b.minExtents.y, y1 = b.maxExtents.y,
+      z0 = b.minExtents.z - 1, z1 = b.maxExtents.z}
+  end)
+  each('River', function(o)
+    local n = o:getSegmentCount()
+    for i = 0, n - 2 do
+      local a, _, c = o:getSegmentSurfaceCorners(i)
+      local a2, _, c2 = o:getSegmentSurfaceCorners(i + 1)
+      for _, t in ipairs({{a, c, a2}, {c, c2, a2}}) do
+        local tri = {}
+        for k = 1, 3 do tri[k] = {x = t[k].x, y = t[k].y, z = t[k].z} end
+        local x0 = math.floor(math.min(tri[1].x, tri[2].x, tri[3].x) / RIVER_CELL)
+        local x1 = math.floor(math.max(tri[1].x, tri[2].x, tri[3].x) / RIVER_CELL)
+        local y0 = math.floor(math.min(tri[1].y, tri[2].y, tri[3].y) / RIVER_CELL)
+        local y1 = math.floor(math.max(tri[1].y, tri[2].y, tri[3].y) / RIVER_CELL)
+        for gx = x0, x1 do
+          for gy = y0, y1 do
+            local k = gx * 1000003 + gy
+            water.rivers[k] = water.rivers[k] or {}
+            table.insert(water.rivers[k], tri)
+          end
+        end
+      end
+    end
+  end)
+end
+-- the height of a river's surface over (x, y), or nil
+local function riverSurface(x, y)
+  local list = water.rivers[math.floor(x / RIVER_CELL) * 1000003 + math.floor(y / RIVER_CELL)]
+  if not list then return nil end
+  for _, t in ipairs(list) do
+    local a, b, c = t[1], t[2], t[3]
+    local d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y)
+    if d ~= 0 then
+      local l1 = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) / d
+      local l2 = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) / d
+      local l3 = 1 - l1 - l2
+      if l1 >= 0 and l2 >= 0 and l3 >= 0 then return l1 * a.z + l2 * b.z + l3 * c.z end
+    end
+  end
+  return nil
+end
+-- is ground at (x, y, z) (BeamNG axes) under water?
+local function underWater(x, y, z)
+  if not water then return false end
+  for _, h in ipairs(water.planes) do if z < h then return true end end
+  for _, b in ipairs(water.blocks) do
+    if x >= b.x0 and x <= b.x1 and y >= b.y0 and y <= b.y1 and z >= b.z0 and z < b.z1 then return true end
+  end
+  local h = riverSurface(x, y)
+  return h ~= nil and z < h
+end
+
 -- ac.findNodes: the app looks for AC's spawn nodes (exploration seeds) and the extent of the static geometry.
--- BeamNG levels have no grid (so no grid girls); the road graph and the player's car seed the exploration.
+-- BeamNG levels have no grid (so no grid girls): the road graph's nodes in the ped area (and the player's car,
+-- if it's in it) seed the exploration; the static geometry's extent is the area.
+local areaSeedList
+local function areaSeeds()
+  if areaSeedList then return areaSeedList end
+  local inside = {}
+  for _, n in ipairs(getRoadNodes()) do if inArea(n.x, n.y) then inside[#inside + 1] = n end end
+  areaSeedList = {}
+  local step = math.max(1, math.floor(#inside / 63))
+  for i = 1, #inside, step do
+    if #areaSeedList >= 63 then break end
+    areaSeedList[#areaSeedList + 1] = inside[i]
+  end
+  -- no roads there: the ground in the middle of the area
+  local cx, cy = areaCentre()
+  local top = 3000
+  local d = castRayStatic(BVec3(cx, cy, top), BVec3(0, 0, -1), 6000)
+  if d and d < 6000 then areaSeedList[#areaSeedList + 1] = {x = cx, y = cy, z = top - d} end
+  return areaSeedList
+end
 local function findNodes(name)
   local ref = {}
   local seedIndex = tonumber(name:match('^AC_HOTLAP_START_(%d+)$') or '')
   if seedIndex then
-    local nodes = getRoadNodes()
-    local step = math.max(1, math.floor(#nodes / 64))
-    local n = nodes[1 + seedIndex * step]
+    local n = areaSeeds()[seedIndex + 1]
     ref.getWorldTransformationRaw = function()
       if not n then return nil end
       return {position = toAC(n), look = avec3(0, 0, 1)}
@@ -162,19 +288,14 @@ local function findNodes(name)
       local id = be:getPlayerVehicleID(0)
       local v = id and id >= 0 and be:getObjectByID(id)
       if not v then return nil end
-      return {position = toAC(v:getPosition()), look = avec3(0, 0, 1)}
+      local p = v:getPosition()
+      if not inArea(p.x, p.y) then return nil end
+      return {position = toAC(p), look = avec3(0, 0, 1)}
     end
   elseif name == 'trackRoot:yes' or name == 'staticRoot:yes' then
     ref.getStaticAABB = function()
-      local nodes = getRoadNodes()
-      if #nodes == 0 then return avec3(), avec3(), 0 end
-      local mn, mx = avec3(math.huge, math.huge, math.huge), avec3(-math.huge, -math.huge, -math.huge)
-      for _, n in ipairs(nodes) do
-        local p = toAC(n)
-        mn:set(math.min(mn.x, p.x), math.min(mn.y, p.y), math.min(mn.z, p.z))
-        mx:set(math.max(mx.x, p.x), math.max(mx.y, p.y), math.max(mx.z, p.z))
-      end
-      return mn, mx, #nodes
+      local cx, cy = areaCentre()
+      return avec3(cx - area.half, -1000, cy - area.half), avec3(cx + area.half, 3000, cy + area.half), 1
     end
   else
     ref.getWorldTransformationRaw = function() return nil end
@@ -273,10 +394,14 @@ local function ensureMaterial(name, texPath, color)
   local mat = createObject('Material')
   mat:setField('mapTo', 0, name)
   if texPath then
+    -- an opaque, cut-out, unlit sprite (like the AC app's): the classic material, its texture's alpha only clips
+    mat:setField('version', 0, '0')
     mat:setField('colorMap', 0, texPath)
-    mat:setField('baseColorMap', 0, texPath)
     mat:setField('alphaTest', 0, '1')
-    mat:setField('alphaRef', 0, '64')
+    mat:setField('alphaRef', 0, '127')
+    mat:setField('translucent', 0, '0')
+    mat:setField('emissive', 0, '1')
+    mat:setField('castShadows', 0, '0')
   else
     mat:setField('diffuseColor', 0, color or '0.35 0 0 0.8')
     mat.translucent = true
@@ -441,13 +566,13 @@ end
 local function stopApp()
   if meshObj then pcall(function() meshObj:delete() end) meshObj = nil end
   env, renderCallback, quads, cars, carIds, prevVel, roadNodes = nil, nil, {}, {}, {}, {}, nil
-  jumpCallbacks = {}
+  jumpCallbacks, areaSeedList, water, meshBlocks, selfTestQuads = {}, nil, nil, nil, nil
   saveStorageIfChanged()
 end
 
 local function startApp()
   stopApp()
-  appError = nil
+  appError, errors = nil, {}
   local level = getCurrentLevelIdentifier and getCurrentLevelIdentifier() or nil
   if not level or level == '' then return end
   if not FS:directoryExists(TEMP_DIR) then FS:directoryCreate(TEMP_DIR) end
@@ -484,8 +609,11 @@ local function startApp()
       OnlineEvent = function() return function() end, function() end end,
     },
     physics = {raycastTrack = function(pos, dir, len)
+      stats.rays = stats.rays + 1
       local d = castRayStatic(toBNG(pos.x, pos.y, pos.z), toBNG(dir.x, dir.y, dir.z), len)
       if not d or d >= len then return -1 end
+      -- looking down onto ground under water: no ground there
+      if dir.y < -0.9 and underWater(pos.x + dir.x * d, pos.z + dir.z * d, pos.y + dir.y * d) then return -1 end
       return d
     end},
     render = {
@@ -507,8 +635,15 @@ local function startApp()
     package.path = 'lua/ge/extensions/carmapeds/?.lua;' .. package.path
   end
   -- BeamNG levels are mostly drivable terrain: explore them in bigger batches per frame than AC (loading only)
+  -- and only inside the ped area
   local okEx, explore = pcall(require, 'src/explore')
-  if okEx and explore then explore.ATTEMPTS_PER_YIELD, explore.RAYS_PER_YIELD = 200, 3000 end
+  if okEx and explore then
+    explore.ATTEMPTS_PER_YIELD, explore.RAYS_PER_YIELD = 200, 3000
+    local cx, cy = areaCentre()
+    explore.CLIP = {min = {x = cx - area.half, z = cy - area.half}, max = {x = cx + area.half, z = cy + area.half}}
+  end
+  local okW, werr = pcall(loadWater)
+  if not okW then water = nil logf('W', 'water not found: ' .. tostring(werr)) end
   setfenv(chunk, env)
   local ok, e = pcall(chunk)
   if not ok then appError = tostring(e) logf('E', appError) env = nil return end
@@ -517,10 +652,86 @@ end
 
 -- ---------------------------------------------------------------------------------------------
 -- Hooks
+-- The BeamNG part of the window: the ped area, drawing on or off, what it costs
+local areaEdit
+local function areaWindow()
+  if not areaEdit then areaEdit = {half = area.half, cx = area.cx, cy = area.cy} end
+  im.TextWrapped('Pedestrians are placed in a square around the middle of the map (of its roads), or a spot you choose.')
+  local p = im.FloatPtr(areaEdit.half * 2)
+  if im.SliderFloat('##areaSize', p, 200, 10000, 'Area: %.0f m square') then areaEdit.half = p[0] / 2 end
+  if im.Button('Middle of the map') then areaEdit.cx, areaEdit.cy = nil, nil end
+  im.SameLine()
+  if im.Button('Around me') then
+    local id = be:getPlayerVehicleID(0)
+    local v = id and id >= 0 and be:getObjectByID(id)
+    local pos = v and v:getPosition() or core_camera.getPosition()
+    areaEdit.cx, areaEdit.cy = pos.x, pos.y
+  end
+  im.SameLine()
+  local changed = areaEdit.half ~= area.half or areaEdit.cx ~= area.cx or areaEdit.cy ~= area.cy
+  if im.Button(changed and 'Apply (places the peds again)' or 'Apply') and changed then
+    area.half, area.cx, area.cy = areaEdit.half, areaEdit.cx, areaEdit.cy
+    if jsonWriteFile then jsonWriteFile(AREA_FILE, {half = area.half, cx = area.cx, cy = area.cy}, true) end
+    startApp()
+  end
+  local cx, cy = areaCentre()
+  im.TextWrapped(esc(('Now: %.0f m square around (%.0f, %.0f)%s.'):format(area.half * 2, cx, cy,
+    area.cx and '' or ', the middle of the map')))
+  local b = im.BoolPtr(drawPeds)
+  if im.Checkbox('Draw the peds', b) then drawPeds = b[0] end
+  if shown.update then
+    im.TextWrapped(esc(('Per frame: app %.2f ms, drawing %.2f ms + mesh %.2f ms (%d sprites); %.0f raycasts a second.')
+      :format(shown.update, shown.collect, shown.mesh, shown.quads, shown.rays)))
+  end
+  if meshBlocks ~= nil then
+    im.TextWrapped(meshBlocks and 'Sprite mesh test: it has collision (raycasts hit the sprites).'
+      or 'Sprite mesh test: no collision.')
+  end
+end
+
+-- the app's errors are kept (each once, counted) and shown in the window; the full traceback goes to the log
 local function call(fn, ...)
   if not fn then return end
-  local ok, e = pcall(fn, ...)
-  if not ok then appError = tostring(e) logf('E', appError) end
+  local ok, e = xpcall(fn, debug.traceback, ...)
+  if ok then return end
+  e = tostring(e)
+  local first = e:match('^[^\n]*')
+  for _, x in ipairs(errors) do if x.text == first then x.count = x.count + 1 return end end
+  errors[#errors + 1] = {text = first, where = e:match('\n[^\n]*\n([^\n]*)') or '', count = 1}
+  if #errors > 5 then table.remove(errors, 1) end
+  logf('E', e)
+end
+
+-- Does the sprite mesh have collision (do static raycasts hit the sprites)? A ray towards a few sprites' middles
+-- from 2 m in front of them: hits at 2 m mean yes. That would slow BeamNG down (the collision is rebuilt with
+-- every mesh) and get in the peds' own raycasts.
+local function selfTest()
+  local tried, hits = 0, 0
+  for i = 1, #selfTestQuads, math.max(1, math.floor(#selfTestQuads / 5)) do
+    local q = selfTestQuads[i]
+    if q.material:find('carmapeds_img', 1, true) then
+      local c = toBNG((q.p1.x + q.p3.x) / 2, (q.p1.y + q.p3.y) / 2, (q.p1.z + q.p3.z) / 2)
+      local ax, ay, az = q.p2.x - q.p1.x, q.p2.y - q.p1.y, q.p2.z - q.p1.z
+      local bx, by, bz = q.p4.x - q.p1.x, q.p4.y - q.p1.y, q.p4.z - q.p1.z
+      local n = toBNG(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+      local l = math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z)
+      if l > 0 then
+        local nx, ny, nz = n.x / l, n.y / l, n.z / l
+        for _, side in ipairs({1, -1}) do
+          local o = BVec3(c.x + nx * 2 * side, c.y + ny * 2 * side, c.z + nz * 2 * side)
+          local d = castRayStatic(o, BVec3(-nx * side, -ny * side, -nz * side), 2.5)
+          tried = tried + 1
+          if d and math.abs(d - 2) < 0.1 then hits = hits + 1 end
+        end
+      end
+    end
+    if tried >= 10 then break end
+  end
+  if tried > 0 then
+    meshBlocks = hits * 2 >= tried
+    logf('I', ('sprite mesh self-test: %d of %d rays hit the sprites (%s)'):format(hits, tried, meshBlocks and 'it has collision' or 'no collision'))
+  end
+  selfTestQuads = nil
 end
 
 local function onUpdate(dtReal, dtSim)
@@ -531,15 +742,30 @@ local function onUpdate(dtReal, dtSim)
   sim.isPaused = dtSim == 0
   sim.timeToSessionStart = sim.timeToSessionStart - dtSim * 1000
   updateCars(dtSim)
+  local t0 = clock()
   call(env.script.update, dtSim)
+  local t1 = clock()
+  stats.update = stats.update + (t1 - t0)
+  if selfTestQuads and meshBlocks == nil then selfTest() end
 
   -- the peds' mesh, MESH_HZ times a second
   local now = clock()
   if renderCallback and now - meshAt >= 1 / MESH_HZ then
     meshAt = now
     quads = {}
-    call(renderCallback)
+    if drawPeds then call(renderCallback) end
+    local t2 = clock()
     call(rebuildMesh)
+    stats.collect, stats.mesh = stats.collect + (t2 - now), stats.mesh + (clock() - t2)
+    stats.quads = #quads
+    if meshBlocks == nil and #quads >= 3 then selfTestQuads = quads end
+  end
+  stats.frames = stats.frames + 1
+  if now - stats.t0 >= 1 then
+    local f = math.max(1, stats.frames)
+    shown = {update = stats.update * 1000 / f, collect = stats.collect * 1000 / f, mesh = stats.mesh * 1000 / f,
+      rays = stats.rays / (now - stats.t0), quads = stats.quads}
+    stats = {t0 = now, update = 0, collect = 0, mesh = 0, rays = 0, quads = stats.quads, frames = 0}
   end
 
   -- HUD: a transparent overlay the size of the screen
@@ -560,7 +786,13 @@ local function onUpdate(dtReal, dtSim)
     im.SetNextWindowSize(im.ImVec2(420, 520), im.Cond_FirstUseEver)
     if im.Begin('Carmageddon Pedestrians') then
       if appError then im.TextColored(im.ImVec4(1, 0.3, 0.3, 1), esc(appError)) end
+      for _, e in ipairs(errors) do
+        im.TextColored(im.ImVec4(1, 0.3, 0.3, 1), esc(('Lua error (%dx): %s'):format(e.count, e.text)))
+        if e.where ~= '' then im.TextWrapped(esc('  at ' .. e.where:gsub('^%s+', ''))) end
+      end
       call(env.script.windowMain, dtReal)
+      im.Separator()
+      areaWindow()
       im.Separator()
       call(env.script.windowSettings, dtReal)
     end
