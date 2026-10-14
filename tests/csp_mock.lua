@@ -130,15 +130,13 @@ return function(opts)
       assert(params.dopplerEffect == 0, 'ped sounds without doppler')
       function ev:setPosition(p)
         assert(p.x, 'position') assert(not disposed, 'disposed audio event used')
-        ev.placedFrame = ev.placedFrame or H.frameNo
+        ev.placed = true
       end
       function ev:start()
         assert(not disposed, 'disposed audio event started')
         assert(params.loop or not started, 'one-shot audio event started twice (it only plays once)')
         started = H.time
-        -- CSP passes position and volume to the audio engine a frame or so later: a sound started in the
-        -- frame it was placed plays its first moment loud, from the wrong place
-        if not ev.placedFrame or H.frameNo - ev.placedFrame < 2 then H.loudStarts = (H.loudStarts or 0) + 1 end
+        if not ev.placed then H.unplaced = (H.unplaced or 0) + 1 end  -- started without a position
         H.startedEvents = H.startedEvents or {}
         H.startedEvents[#H.startedEvents + 1] = ev
         -- CSP shares one loaded copy between events with the same parameters, and a copy plays once at a

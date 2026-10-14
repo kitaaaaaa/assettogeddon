@@ -205,7 +205,7 @@ do
   check(b.hitPoints < 0 and niceShotFlag(b) == true, 'off a wall and spinning into a ped: nice shot')
 end
 check(H.audioCreated > 0, 'audio events created')
-check((H.loudStarts or 0) == 0, 'sounds start 2+ frames after being placed: ' .. (H.loudStarts or 0) .. ' too soon')
+check((H.unplaced or 0) == 0, 'every sound placed at its ped before it starts: ' .. (H.unplaced or 0) .. ' not')
 local audible = 0
 for _, ev in ipairs(H.startedEvents or {}) do if ev.volume > 0 then audible = audible + 1 end end
 check(audible > 0 and audible == #H.startedEvents, ('sounds start at their volume: %d of %d'):format(audible, #(H.startedEvents or {})))
