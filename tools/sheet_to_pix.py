@@ -6,14 +6,26 @@ import sys, os, struct
 import numpy as np
 from PIL import Image
 sheet_path, index_path, pal_path, out_path, prev = sys.argv[1:6]
-COLS, CW, CH, LABEL, TOP = 6, 324, 450, 26, 50  # the template's layout
-TW, TH = COLS * CW, None
 frames = [l.split() for l in open(index_path)]  # i w h name, in template order
+# the template's layout (template_sheet.py): cells fit the biggest frame at 3x plus 24 px
+COLS, LABEL, TOP = 6, 26, 50
+CW = max(int(f[1]) for f in frames) * 3 + 24
+CH = max(int(f[2]) for f in frames) * 3 + 24
+TW, TH = COLS * CW, None
 rows = (len(frames) + COLS - 1) // COLS
 TH = TOP + rows * (CH + LABEL)
 sheet = Image.open(sheet_path).convert('RGB')
-sx, sy = sheet.width / TW, sheet.height / TH
 src = np.asarray(sheet).astype(float)
+# where the grid is: the magenta cells' extent (generators change the canvas size and margins). Across, the first
+# row's 6 cells span 2 .. 6*CW-3; down, the first row's top to the last row's bottom
+mag = (src[..., 1] < np.minimum(src[..., 0], src[..., 2]) - 80) & (np.minimum(src[..., 0], src[..., 2]) > 150)
+ys, xs = np.nonzero(mag)
+full = mag[:, :].sum(axis=1) > 0.5 * mag.sum(axis=1).max()  # rows of full-width magenta (the first rows)
+x0m, x1m = xs.min(), xs.max()
+y0m, y1m = ys.min(), ys.max()
+sx = (x1m - x0m + 1) / (COLS * CW - 4)
+sy = (y1m - y0m + 1) / ((rows - 1) * (CH + LABEL) + CH)
+ox, oy = x0m - 2 * sx, y0m - TOP * sy
 
 # the palette (DRRENDER.PAL: a pixelmap of 256 4-byte entries, x r g b)
 d = open(pal_path, 'rb').read()
@@ -35,8 +47,8 @@ report = []
 for k, (i, w, h, name) in enumerate(frames):
     w, h = int(w), int(h)
     col, row = k % COLS, k // COLS
-    x0, y0 = col * CW * sx, (TOP + row * (CH + LABEL)) * sy
-    cell = src[int(round(y0)):int(round(y0 + CH * sy)), int(round(x0)):int(round(x0 + CW * sx))]
+    x0, y0 = ox + col * CW * sx, oy + (TOP + row * (CH + LABEL)) * sy
+    cell = src[max(0, int(round(y0))):int(round(y0 + CH * sy)), max(0, int(round(x0))):int(round(x0 + CW * sx))]
     r, g, b = cell[..., 0], cell[..., 1], cell[..., 2]
     # magenta (and the generator's darker purple shading on it): green well below both red and blue
     key = (g < np.minimum(r, b) - 50) & (np.minimum(r, b) > 90)
