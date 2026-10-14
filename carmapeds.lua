@@ -1408,7 +1408,10 @@ render.on('main.track.transparent', function()
   for _, ped in ipairs(peds) do
     local px, py, pz = ped.x, ped.y, ped.z
     if ped.px then px, py, pz = ped.px + (px - ped.px) * alpha, ped.py + (py - ped.py) * alpha, ped.pz + (pz - ped.pz) * alpha end
-    if ped.image and (px - cam.x) ^ 2 + (pz - cam.z) ^ 2 < maxD2 then
+    local ddx, ddy, ddz = px - cam.x, py - cam.y, pz - cam.z
+    local d2 = ddx * ddx + ddz * ddz
+    -- in range, not behind the camera, and over a few pixels tall (1.7 m: out to about 500 m)
+    if ped.image and d2 < maxD2 and ddx * cl.x + ddy * cl.y + ddz * cl.z > -4 and (ped.height2 or 1.7) ^ 2 > d2 * 1e-5 then
       local tex = textures[ped.image]
       if tex then
         local spin = 0

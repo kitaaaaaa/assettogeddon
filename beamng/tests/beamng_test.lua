@@ -110,7 +110,12 @@ function setExtensionUnloadMode() end
 
 -- imgui: just enough to run the windows
 local function ptr(v) return {[0] = v} end
+local hudTexts = 0
 ui_imgui = setmetatable({
+  -- in the game GetFont failed (bad argument); the HUD must not need it
+  GetFont = function() error('GetFont: bad argument #3 (as in the game)') end,
+  TextColored = function() hudTexts = hudTexts + 1 end,
+  GetWindowDrawList = function() return {} end,
   BoolPtr = ptr, FloatPtr = ptr,
   ImVec2 = function(x, y) return {x = x, y = y} end,
   ImVec4 = function(x, y, z, w) return {x, y, z, w} end,
@@ -155,6 +160,7 @@ local errors = 0
 for _, l in ipairs(logs) do if l:find('^E ') then errors = errors + 1 print('log: ' .. l) end end
 for _, l in ipairs(logs) do if l:find('explored') or l:find('placed') or l:find('pedestrians') then print('log: ' .. l) end end
 check(errors == 0, 'no errors logged')
+check(hudTexts > 100, 'HUD text drawn: ' .. hudTexts)
 -- the sprites: one-quad meshes made once each and moved; the ones shown now
 local sprites, shownNow = {}, {}
 for _, o in ipairs(created) do

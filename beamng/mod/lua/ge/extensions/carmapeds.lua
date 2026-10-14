@@ -456,6 +456,7 @@ local pools = {}        -- key (material, mirrored) -> {objects}
 local poolUsed = {}     -- key -> how many are in use this frame
 local poolShown = {}    -- key -> how many were shown last frame
 local poolObjects = 0
+local spriteLast = setmetatable({}, {__mode = 'k'})  -- object -> its last position, rotation and size
 local MAX_SPRITES = 1500
 local function unitQuad(material, mirror)
   local u0, u1 = 0, 1
@@ -538,8 +539,15 @@ local function drawSprites()
           poolUsed[key] = n
           local qx, qy, qz, qw = rotation(yx, yy, yz, ux, uy, uz)
           local cx, cy, cz = p4.x + (p2.x - p4.x) / 2, p4.y + (p2.y - p4.y) / 2, p4.z + (p2.z - p4.z) / 2
-          o:setPosRot(cx, cy, cz, qx, qy, qz, qw)
-          o:setScale(BVec3(w, 1, h))
+          -- only moved when it has (standing peds, most of them, don't)
+          local last = spriteLast[o]
+          if not last then last = {} spriteLast[o] = last end
+          if last[1] ~= cx or last[2] ~= cy or last[3] ~= cz or last[4] ~= qx or last[5] ~= qy or last[6] ~= qz or last[7] ~= w or last[8] ~= h then
+            o:setPosRot(cx, cy, cz, qx, qy, qz, qw)
+            o:setScale(BVec3(w, 1, h))
+            last[1], last[2], last[3], last[4], last[5], last[6], last[7], last[8] = cx, cy, cz, qx, qy, qz, w, h
+            stats.moved = (stats.moved or 0) + 1
+          end
           if n > (poolShown[key] or 0) then setHidden(o, false) end
         end
       end
@@ -595,16 +603,23 @@ local ui = {
     return avec2(s.x, s.y)
   end,
   setCursor = function(p) hud.cursor = avec2(p.x, p.y) end,
+  -- HUD text: plain imgui text in the HUD window at the size asked (the window's font scale), placed and aligned
+  -- in the box (GetFont for the draw list's sized text failed in the game)
   dwriteTextAligned = function(text, size, hAlign, vAlign, box, wrap, color)
-    if not hud.dl then return end
+    if not hud.active then return end
     text = tostring(text)
-    local scale = size / im.GetFontSize()
+    im.SetWindowFontScale(1)
+    local scale = size / math.max(1, im.GetFontSize())
+    im.SetWindowFontScale(scale)
     local ts = im.CalcTextSize(text)
-    local w, h = ts.x * scale, ts.y * scale
+    local w, h = ts.x, ts.y
     local x, y = hud.cursor.x, hud.cursor.y
     if hAlign == 1 then x = x + (box.x - w) / 2 elseif hAlign == 2 then x = x + box.x - w end
     if vAlign == 1 then y = y + (box.y - h) / 2 elseif vAlign == 2 then y = y + box.y - h end
-    im.ImDrawList_AddText2(hud.dl, im.GetFont(), size, im.ImVec2(x, y), u32(color or rgbm(1, 1, 1, 1)), text)
+    local c = color or rgbm(1, 1, 1, 1)
+    im.SetCursorScreenPos(im.ImVec2(x, y))
+    im.TextColored(im.ImVec4(c.r or 1, c.g or 1, c.b or 1, c.mult or 1), esc(text))
+    im.SetWindowFontScale(1)
   end,
   drawImage = function(tex, p1, p2)
     if not hud.dl or type(tex) ~= 'table' then return end
@@ -763,8 +778,8 @@ local function areaWindow()
   local b = im.BoolPtr(drawPeds)
   if im.Checkbox('Draw the peds', b) then drawPeds = b[0] end
   if shown.update then
-    im.TextWrapped(esc(('Per frame: app %.2f ms, drawing %.2f ms + placing sprites %.2f ms (%d sprites, %d made); %.0f raycasts a second.')
-      :format(shown.update, shown.collect, shown.mesh, shown.quads, poolObjects, shown.rays)))
+    im.TextWrapped(esc(('Per frame: app %.2f ms, drawing %.2f ms + placing sprites %.2f ms (%d sprites, %.0f moved, %d made); %.0f raycasts a second.')
+      :format(shown.update, shown.collect, shown.mesh, shown.quads, shown.moved or 0, poolObjects, shown.rays)))
   end
   -- the sprites' material: which one looks right in this version of BeamNG
   local mode = materialMode
@@ -785,9 +800,15 @@ local function areaWindow()
 end
 
 -- the app's errors are kept (each once, counted) and shown in the window; the full traceback goes to the log
+local seenErrors = {}
+local function traceback(e)
+  if seenErrors[tostring(e)] then return e end  -- the same again: no traceback (it costs time every frame)
+  seenErrors[tostring(e)] = true
+  return debug.traceback(e, 2)
+end
 local function call(fn, ...)
   if not fn then return end
-  local ok, e = xpcall(fn, debug.traceback, ...)
+  local ok, e = xpcall(fn, traceback, ...)
   if ok then return end
   e = tostring(e)
   local first = e:match('^[^\n]*')
@@ -858,7 +879,7 @@ local function onUpdate(dtReal, dtSim)
   if now - stats.t0 >= 1 then
     local f = math.max(1, stats.frames)
     shown = {update = stats.update * 1000 / f, collect = stats.collect * 1000 / f, mesh = stats.mesh * 1000 / f,
-      rays = stats.rays / (now - stats.t0), quads = stats.quads}
+      rays = stats.rays / (now - stats.t0), quads = stats.quads, moved = (stats.moved or 0) / f}
     stats = {t0 = now, update = 0, collect = 0, mesh = 0, rays = 0, quads = stats.quads, frames = 0}
   end
 
@@ -869,9 +890,9 @@ local function onUpdate(dtReal, dtSim)
   local flags = im.WindowFlags_NoTitleBar + im.WindowFlags_NoResize + im.WindowFlags_NoMove + im.WindowFlags_NoInputs
     + im.WindowFlags_NoBackground + im.WindowFlags_NoSavedSettings + im.WindowFlags_NoScrollbar + im.WindowFlags_NoFocusOnAppearing
   if im.Begin('##carmapedsHUD', nil, flags) then
-    hud.dl = im.GetWindowDrawList()
+    hud.dl, hud.active = im.GetWindowDrawList(), true
     call(env.script.fullscreenUI)
-    hud.dl = nil
+    hud.dl, hud.active = nil, false
   end
   im.End()
 
