@@ -216,6 +216,16 @@ function M.load(root, io, yield, opts)
   local pedText = io.read(data .. '/' .. pedFile)
   if not pedText then return nil, ('can\'t read %s/%s (%s)'):format(data, pedFile, io.lastError or 'unknown error') end
   local peds, w = peddata.parse(pedText, out.method)
+  if #peds == 0 then
+    -- GENERAL.TXT picks the cipher of the '@' lines; a mixed DATA folder (one version's GENERAL.TXT, another's
+    -- peds) can need the other one
+    local other = 3 - out.method
+    local peds2, w2 = peddata.parse(pedText, other)
+    if #peds2 > 0 then
+      out.notes[#out.notes + 1] = ('%s read with cipher %d (GENERAL.TXT suggested %d)'):format(pedFile, other, out.method)
+      peds, w, out.method = peds2, w2, other
+    end
+  end
   for _, s in ipairs(w) do warn(s) end
 
   local soundTxt = io.read(data .. '/SOUND/SOUND.TXT')

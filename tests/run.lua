@@ -200,6 +200,23 @@ if fake then
   local found32 = false
   for ref in pairs(c1data.EXCLUDED_REFS) do if ref == 32 then found32 = true end end
   check(not found32, 'RO1 (ref 32) back')
+  -- a PEDESTRN.TXT encrypted with the other cipher than GENERAL.TXT's (a UK file with another version's GENERAL.TXT)
+  local c1text = require('src/c1text')
+  local mixed = {exists = fio.exists, read = function(p)
+    local d = fio.read(p)
+    if d and p:find('PEDESTRN.TXT', 1, true) then
+      local out = {}
+      for l in (d .. '\n'):gmatch('([^\n]*)\n') do
+        l = l:gsub('\r$', '')
+        local plain = l:sub(1, 1) == '@' and c1text.decode(l:sub(2), 2) or l
+        out[#out + 1] = '@' .. c1text.decode(plain, 1)
+      end
+      return table.concat(out, '\r\n')
+    end
+    return d
+  end}
+  local m = assert(c1data.load(fake, mixed))
+  check(#m.peds == #d.peds, ('PEDESTRN.TXT in the other cipher: %d of %d peds'):format(#m.peds, #d.peds))
   -- a race file without the ped section
   check(c1data.parseRacePeds('VERSION 6\r\nstuff\r\n') == nil, 'no ped section: nil')
 end
