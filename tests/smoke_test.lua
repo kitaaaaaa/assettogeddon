@@ -211,12 +211,12 @@ for _, ev in ipairs(H.startedEvents or {}) do if ev.volume > 0 then audible = au
 check(audible > 0 and audible == #H.startedEvents, ('sounds start at their volume: %d of %d'):format(audible, #(H.startedEvents or {})))
 check((H.cutShort or 0) == 0, 'no sound disposed while still playing: ' .. (H.cutShort or 0))
 check(maxScreams >= 1 and maxScreams <= 3, 'screams play, at most 3 at once: got ' .. maxScreams)
--- finished sounds are disposed: after a quiet spell only the kept (unplayed) one per file is left
+-- finished sounds are disposed: after a quiet spell only the one made ready per file is left
 H.sim.cameraPosition:set(5000, 2, 5000)
 local files = 0
 for _ in pairs(H.state().audioFiles) do files = files + 1 end
 for _ = 1, 600 do H.frame() end
-check(H.audioLive <= files * 4, ('finished sounds disposed: %d events live, %d files (4 copies each)'):format(H.audioLive, files))
+check(H.audioLive <= files, ('finished sounds disposed: %d events live, %d files (one made ready each)'):format(H.audioLive, files))
 
 -- the clock reading infinite, NaN or absurd (as while AC loads or restarts a session): those frames are skipped
 -- (an infinite clock used to loop forever and freeze the game; a hang here is that bug back)

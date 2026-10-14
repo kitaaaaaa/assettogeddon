@@ -127,38 +127,29 @@ local function groundAt(x, y, z) return pedlogic.groundBelow(ray, x, y + 1.5, z,
 -- Sound: C1 sound ids from SOUND.TXT, played in 3D at the ped. A one-shot CSP audio event made from a file
 -- plays only once (CSP docs: it "will become invalid once played once"), so every sound gets a new event,
 -- disposed once CSP says it has finished (isValid() turns false).
--- CSP shares one loaded copy of a file between events made with the same parameters, and a copy can only
--- play once at a time: starting it again cuts off the sound already playing (peds of one type scream the
--- same file, so screams were cut short). So each file is loaded as a few separate copies (slots: the path is
--- written differently, SOUND/./X.WAV, SOUND/././X.WAV, ..., and minDistance differs a tiny bit), and a sound
--- only starts on a copy that isn't playing; with none free, it's dropped.
--- Each copy has an event made ready in advance (made when the data loads, so a sound's first play isn't lost
--- to loading its file); to play, it gets its position and volume and starts. Doppler is off (as for CSP's own
+-- Each file has an event made ready in advance (made when the data loads, so a sound's first play isn't lost
+-- to loading its file); to play, it gets its position and volume and starts, and the next one is made ready. Doppler is off (as for CSP's own
 -- ambient sounds, and C1's peds): with the camera moving at the car's speed it bent the screams' pitch, worse
 -- the faster the car, and a sound that had just been placed got a huge shift.
 -- Live peds' noises (screams) are limited to a few at once, started at least 250 ms apart, and a ped doesn't
 -- start one while its last one is playing, so a crowd reacting to a car isn't a wall of noise. Splats and
 -- death sounds have more room.
-local SLOTS = 4
-local audioFiles = {}  -- file -> {ready = {[slot] = event made ready, not started}} or false (missing)
-local playing = {}     -- {ev, important, file, slot, started (ms), done (once finished)}
+local audioFiles = {}  -- file -> {ready = event made ready, not started} or false (missing)
+local playing = {}     -- {ev, important, started (ms), done (once finished)}
 local MAX_SCREAMS, SCREAM_GAP_MS, MAX_IMPORTANT = 3, 250, 16
 local lastScreamMs = -1e9
 local function realMs() return os.preciseClock() * 1000 end
 
-local function newEvent(file, slot)
-  local dir, name = file:match('^(.*[/\\])([^/\\]+)$')
-  local path = dir and (dir .. ('./'):rep(slot) .. name) or file
-  return ac.AudioEvent.fromFile({filename = path, use3D = true, loop = false, minDistance = 5 + slot * 0.01,
-    maxDistance = 150, dopplerEffect = 0}, false)
+local function newEvent(file)
+  return ac.AudioEvent.fromFile({filename = file, use3D = true, loop = false, minDistance = 5, maxDistance = 150,
+    dopplerEffect = 0}, false)
 end
 
 local function audioFor(file)
   local a = audioFiles[file]
   if a == nil then
     if not io.fileExists(file) then audioFiles[file] = false return false end
-    a = {ready = {}}
-    for slot = 0, SLOTS - 1 do a.ready[slot] = newEvent(file, slot) end
+    a = {ready = newEvent(file)}
     audioFiles[file] = a
   end
   return a
@@ -203,22 +194,16 @@ local function playSoundAt(id, x, y, z, important)
   local file = s.path or (data.soundDir .. s.file)
   local a = audioFor(file)
   if not a then return nil end
-  local n, busy = 0, {}
-  for _, p in ipairs(playing) do
-    if p.important == important then n = n + 1 end
-    if p.file == file then busy[p.slot] = true end
-  end
+  local n = 0
+  for _, p in ipairs(playing) do if p.important == important then n = n + 1 end end
   if n >= (important and MAX_IMPORTANT or MAX_SCREAMS) then return nil end
-  local slot
-  for k = 0, SLOTS - 1 do if not busy[k] then slot = k break end end
-  if not slot then return nil end
   if not important then lastScreamMs = now end
-  local ev = a.ready[slot] or newEvent(file, slot)
-  a.ready[slot] = newEvent(file, slot)  -- the next one for this copy
+  local ev = a.ready or newEvent(file)
+  a.ready = newEvent(file)  -- the next one for this file
   ev.volume = settings.volume * (s.maxVolume or 255) / 255
   ev:setPosition(vec3(x, y + 1, z), vecUp, vec3(0, 0, 1), nil)
   ev:start()
-  local p = {ev = ev, important = important, file = file, slot = slot, started = now}
+  local p = {ev = ev, important = important, started = now}
   playing[#playing + 1] = p
   return p
 end

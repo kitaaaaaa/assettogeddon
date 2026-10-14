@@ -139,13 +139,6 @@ return function(opts)
         if not ev.placed then H.unplaced = (H.unplaced or 0) + 1 end  -- started without a position
         H.startedEvents = H.startedEvents or {}
         H.startedEvents[#H.startedEvents + 1] = ev
-        -- CSP shares one loaded copy between events with the same parameters, and a copy plays once at a
-        -- time: starting it again cuts off the one playing
-        local key = params.filename .. '|' .. tostring(params.minDistance)
-        H.copies = H.copies or {}
-        local other = H.copies[key]
-        if other and other ~= ev and other:isValid() then H.cutShort = (H.cutShort or 0) + 1 end
-        H.copies[key] = ev
         H.logs[#H.logs + 1] = 'sound ' .. params.filename
       end
       function ev:dispose()
