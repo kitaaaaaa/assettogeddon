@@ -1,5 +1,5 @@
 -- Writes a small fake Carmageddon DATA folder for the pratcam tests: a palette, a sound bank with WAVs, and
--- FRANK/ANNIE pratcam folders with 2 hand-made flics (one frame of each kind of chunk) and 45 sequences.
+-- FRANK/ANNIE pratcam folders with hand-made flics (one frame of each kind of chunk) and 45 sequences.
 -- luajit tests/make_fake_prat.lua <out dir>   (makes <out dir>/DATA)
 local D = assert(arg[1], 'usage: make_fake_prat.lua <out dir>') .. '/DATA'
 local function mkdir(p) os.execute('mkdir -p "' .. p .. '"') end
@@ -57,18 +57,31 @@ local flics = {flicFile({f1, f2, f3, f4, f5}, 100), flicFile({f1, f2}, 50)}
 for _, who in ipairs({'FRANK', 'ANNIE'}) do
   local dir = D .. '/64X48X8/PRATCAM/' .. who
   mkdir(dir)
-  write(dir .. '/A.FLI', flics[1])
-  write(dir .. '/B.FLI', flics[2])
-  local t = {'// ' .. who .. ' PRATCAM TEXT FILE', '', '2\t\t// NUMBER OF FLICS', 'A.FLI\t// 0', 'B.FLI  // 1', 'END', '',
-    '45\t\t\t// NUMBER OF SEQUENCES'}
+  -- named like the game's: the driving (engine rumble) flic, the leans and the glances aside
+  local p = who:sub(1, 1)
+  local names = {'A.FLI', 'B.FLI', p .. 'DRIVE1H.FLI', p .. 'SKIDLH.FLI', p .. 'SKIDRH.FLI', p .. 'LOOKLH.FLI', p .. 'LOOKRH.FLI'}
+  for i, n in ipairs(names) do write(dir .. '/' .. n, flics[i == 3 and 1 or 2]) end
+  local t = {'// ' .. who .. ' PRATCAM TEXT FILE', '', #names .. '\t\t// NUMBER OF FLICS'}
+  for i, n in ipairs(names) do t[#t + 1] = n .. '\t// ' .. (i - 1) end
+  t[#t + 1] = 'END'
+  t[#t + 1] = ''
+  t[#t + 1] = '45\t\t\t// NUMBER OF SEQUENCES'
+  -- one flic for these: 0 (slow) the driving flic, 1 (medium) a glance left, 10 (spinning gently) and 25, 26
+  -- (skids) a lean left
+  local only = {[0] = 2, [1] = 5, [10] = 3, [25] = 3, [26] = 3}
   for s = 0, 44 do
     t[#t + 1] = '// Sequence ' .. s
     t[#t + 1] = (s == 0 and 0 or s * 10) .. '\t\t// Precedence'
     t[#t + 1] = '0\t\t// Chunk to start repeating at'
     t[#t + 1] = '1\t\t// Number of chunks'
-    t[#t + 1] = '\t2\t\t// Number of alternatives'
-    t[#t + 1] = ('\t\t%d,50,100,1,%d\t\t// Flic index,%% chance,%% of sound'):format(s % 2, 8700 + s)
-    t[#t + 1] = ('\t\t%d,50,0'):format((s + 1) % 2)
+    if only[s] then
+      t[#t + 1] = '\t1\t\t// Number of alternatives'
+      t[#t + 1] = ('\t\t%d,100,100,1,%d'):format(only[s], 8700 + s)
+    else
+      t[#t + 1] = '\t2\t\t// Number of alternatives'
+      t[#t + 1] = ('\t\t%d,50,100,1,%d\t\t// Flic index,%% chance,%% of sound'):format(s % 2, 8700 + s)
+      t[#t + 1] = ('\t\t%d,50,0'):format((s + 1) % 2)
+    end
   end
   t[#t + 1] = 'END'
   write(dir .. '/PRATCAM.TXT', table.concat(t, '\r\n'))

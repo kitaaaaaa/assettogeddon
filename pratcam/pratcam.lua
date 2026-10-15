@@ -15,6 +15,8 @@ local settings = ac.storage{
   highSpeedMph = 154,    -- C1: 0.01 world units/ms = 69 m/s (155 on C1's speedo, 154 real mph)
   voiceVolume = 1,
   handbrake = true,      -- the handbrake yank reaction (C1: the instant handbrake key)
+  lean = 'away',         -- leaning in turns and spins: 'away' from the turn or 'into' it (C1: random)
+  driveSpeed = 'original', -- the driving (engine rumble) animation's speed: 'original', 'rpm' or 'speed'
 }
 
 local sim = ac.getSim()
@@ -27,7 +29,9 @@ local SKID, FALL = 0.001 * 6900, 0.004 * 6900        -- sideways 6.9 m/s, down 2
 local HIT_K = 0.75 * 0.03
 
 local data, loadError, loader
+local driveRate, holdDriving, chooseSide  -- below, with the car's state
 local textures = {}  -- flic index (0-based) -> {tex, frames, period}
+local flicKinds, flicSides = {}, {lean = {}, look = {}}  -- flic -> {lean = 'L'/'R'} etc.; side -> flic
 local st             -- the sequencer
 local lastDrawn = -1e9
 local clockMs = 0
@@ -139,8 +143,19 @@ local function startLoading()
       missing))
     textures = tex
     data = d
-    st = prat.new(def, function(r) return tex[r].frames end, function(r) return tex[r].period end,
-      math.random, voiceHooks)
+    -- the flics that have a side or go with the engine, by name (Frank's F..., Annie's A...)
+    local kinds, sides = {}, {lean = {}, look = {}}
+    for i, name in ipairs(def.flics) do
+      local u = name:upper()
+      local lean, look = u:match('^%aSKID([LR])H%.'), u:match('^%aLOOK([LR])H%.')
+      if lean then kinds[i - 1] = {lean = lean} sides.lean[lean] = i - 1 end
+      if look then kinds[i - 1] = {look = look} sides.look[look] = i - 1 end
+      if u:match('^%aDRIVE%dH%.') then kinds[i - 1] = {drive = true} end
+    end
+    flicKinds, flicSides = kinds, sides
+    st = prat.new(def, function(r) return tex[r].frames end,
+      function(r) return tex[r].period / (kinds[r] and kinds[r].drive and driveRate() or 1) end, math.random, voiceHooks)
+    st.choose, st.hold = chooseSide, holdDriving
   end)
 end
 
@@ -151,6 +166,38 @@ local right, look, up, vel = vec3(), vec3(), vec3(), vec3()
 local rayPos, rayDown = vec3(), vec3(0, -1, 0)
 
 local function resetCar() car = {} end
+
+-- The driving animation's speed: as in the file, or with the engine (idle: as in the file, the limiter: 3x) or
+-- the ground speed (stopped: as in the file, 60 m/s: 3x).
+driveRate = function()
+  if settings.driveSpeed == 'rpm' and car.rpm then
+    local idle = (car.rpmMinimum or 0) > 0 and car.rpmMinimum or 900
+    local limit = (car.rpmLimiter or 0) > idle and car.rpmLimiter or idle + 6000
+    return 1 + 2 * math.max(0, math.min(1, (car.rpm - idle) / (limit - idle)))
+  elseif settings.driveSpeed == 'speed' and car.speed then
+    return 1 + 2 * math.min(1, car.speed / 60)
+  end
+  return 1
+end
+-- With the engine at 0 rpm, the driving animation stops where it is (until the engine runs, or the car's state
+-- calls for something else).
+holdDriving = function(ref)
+  return flicKinds[ref] and flicKinds[ref].drive and car.rpm == 0 and (st.pending == -1 or st.pending <= 3)
+end
+-- C1 picks the left or right lean at random in spins, and the side of the slide in skids; here the lean goes
+-- with the turn (away from it or into it, the setting), and a glance aside looks into the turn. Straight on,
+-- C1's pick stays.
+chooseSide = function(ref)
+  local k = flicKinds[ref]
+  if not k or (car.turn or 0) == 0 then return ref end
+  if k.lean then
+    local side = (car.turn > 0) == (settings.lean == 'away') and 'R' or 'L'  -- the picture's side of the lean
+    return flicSides.lean[side] or ref
+  elseif k.look then
+    return flicSides.look[car.turn > 0 and 'R' or 'L'] or ref  -- the driver's own side
+  end
+  return ref
+end
 
 local function updateCar(dt)
   local c = ac.getCar(sim.focusedCar)
@@ -177,6 +224,17 @@ local function updateCar(dt)
   end
   if onGround or not car.lastOnGround then car.lastOnGround = clockMs end
   local ax, ay, az = math.abs(vx), math.abs(vy), math.abs(vz)
+  -- which way it's turning: the heading moving to the car's right (+1) or left (-1); in a slide without
+  -- turning, the way the slide throws the car (sliding right: as in a left turn)
+  car.turn = 0
+  if car.prevLook and dt > 0 then
+    local yaw = (look - car.prevLook):dot(right) / dt
+    if yaw > 0.15 then car.turn = 1 elseif yaw < -0.15 then car.turn = -1 end
+  end
+  if car.turn == 0 and ax > SKID then car.turn = vx > 0 and -1 or 1 end
+  car.prevLook = car.prevLook or vec3()
+  car.prevLook:set(look)
+  car.rpm, car.rpmMinimum, car.rpmLimiter, car.speed = c.rpm, c.rpmMinimum, c.rpmLimiter, vel:length()
   local S = prat.SEQ
   local amb
   if ox > 4.5 or oz > 4.5 then amb = S.rollingViolent
@@ -293,8 +351,16 @@ function script.windowSettings(dt)
   v = ui.slider('##voiceVolume', settings.voiceVolume * 100, 0, 100, 'Voice volume: %.0f%%') / 100
   if v ~= settings.voiceVolume then settings.voiceVolume = v end
   if ui.checkbox('React to the handbrake', settings.handbrake) then settings.handbrake = not settings.handbrake end
+  local leans = {'away', 'into'}
+  local at = settings.lean == 'into' and 2 or 1
+  local pick = ui.combo('Lean in turns', at, ui.ComboFlags.None, {'Away from the turn', 'Into the turn'})
+  if leans[pick] then settings.lean = leans[pick] end
+  local speeds = {'original', 'rpm', 'speed'}
+  at = settings.driveSpeed == 'rpm' and 2 or settings.driveSpeed == 'speed' and 3 or 1
+  pick = ui.combo('Driving animation', at, ui.ComboFlags.None, {'Original speed', 'Faster with engine rpm', 'Faster with ground speed'})
+  if speeds[pick] then settings.driveSpeed = speeds[pick] end
 end
 
 startLoading()
 -- offline tests (tests/smoke_test.lua) look at the internals through this; nil in AC
-if __pratcamTest then __pratcamTest.state = function() return {st = st, data = data, loadError = loadError, clockMs = clockMs} end end
+if __pratcamTest then __pratcamTest.state = function() return {st = st, data = data, loadError = loadError, clockMs = clockMs, turn = car.turn} end end

@@ -80,8 +80,10 @@ function M.parse(text)
   return out
 end
 
--- A pratcam. def: parse()'s result; frames(ref) -> frame count, period(ref) -> ms per frame;
--- random(a, b) -> integer in [a, b]; voice: {playing() -> bool, play(id)}.
+-- A pratcam. def: parse()'s result; frames(ref) -> frame count, period(ref) -> ms per frame (asked each frame,
+-- so it can change); random(a, b) -> integer in [a, b]; voice: {playing() -> bool, play(id)}.
+-- Optional, set afterwards: st.choose(ref) -> the flic to play instead of the one picked (e.g. the other side);
+-- st.hold(ref) -> true to stop the flic where it is for now.
 function M.new(def, frames, period, random, voice)
   return {def = def, frames = frames, period = period, random = random, voice = voice,
     ambient = -1, pending = -1, index = -1, chunk = 0, precedence = 0,
@@ -124,7 +126,7 @@ nextChunk = function(st, depth)
   for _, alt in ipairs(seq.chunks[st.chunk + 1].alts) do
     r = r - alt.chance
     if r <= 0 then
-      st.ref, st.frame = alt.ref, 0
+      st.ref, st.frame = st.choose and st.choose(alt.ref) or alt.ref, 0
       if alt.soundChance > 0 and #alt.sounds > 0 and st.random(0, 99) < alt.soundChance
         and not (st.precedence == 0 and st.voice.playing()) then
         st.voice.play(alt.sounds[st.random(1, #alt.sounds)])
@@ -153,6 +155,10 @@ end
 -- Advances the flic to the time now (ms). Afterwards st.shownRef / st.shownFrame (1-based) is the picture.
 function M.update(st, now)
   if st.index == -1 or not st.ref then return end
+  if st.hold and st.hold(st.ref) then
+    if st.last ~= 0 then st.last = now end  -- held: no frames owed for the time stopped
+    return
+  end
   local n = st.last ~= 0 and math.floor((now - st.last) / st.period(st.ref)) or 1
   for _ = 1, n do
     st.frame = st.frame + 1

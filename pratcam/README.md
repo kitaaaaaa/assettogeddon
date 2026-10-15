@@ -47,11 +47,21 @@ Reactions:
 - **Handbrake**: pulling the handbrake at speed with the wheels on the ground. In Carmageddon this is the
   instant handbrake key; it can be switched off in the settings.
 
+Turns (changes from the game, which picks these at random or by the side of a slide):
+
+- **Leaning**: in spins and skids, the lean goes with the turn, away from it or into it (a setting).
+- **Glances aside**: the occasional look left or right while driving looks into the turn when the car is
+  turning; driving straight, it's the game's random pick.
+
+The driving animation (the engine rumble) can run at the game's speed, or faster with the engine's rpm (idle:
+the game's speed, the limiter: 3x) or with the car's speed (stopped: the game's speed, 60 m/s: 3x). With the
+engine at 0 rpm it stops on the frame it's at, until the engine runs again or something else happens.
+
 Voice lines play one at a time: one that comes while another is playing is skipped, as in the game. The
 pratcam only runs while its window is open.
 
 Settings: a dropdown for the driver (Max Damage or Die Anna), the high-speed threshold (Carmageddon's is 154 mph, which few AC cars
-reach), voice volume, and the handbrake reaction.
+reach), voice volume, the handbrake reaction, which way to lean in turns, and the driving animation's speed.
 
 Not done: the race events (checkpoints, finishing, out of time, wasting an opponent), powerups, and turning
 the head in the cockpit view.

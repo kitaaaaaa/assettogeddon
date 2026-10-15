@@ -45,10 +45,10 @@ local function voicesPlaying()
 end
 local function run(n) for _ = 1, n do frames(1) if voicesPlaying() > 1 then overlap = overlap + 1 end end end
 
-frames(10)
+for _ = 1, 200 do if state().data or state().loadError then break end frames(1) end
 local s = state()
 check(s.data and not s.loadError, 'loaded: ' .. tostring(s.loadError))
-check(H.decoded == 2, 'one texture per flic: ' .. H.decoded)
+check(H.decoded == 7, 'one texture per flic: ' .. H.decoded)
 run(120)
 s = state()
 check(s.st.ambient == 0 and s.st.shownRef ~= nil, 'stationary: ambient 0, got ' .. s.st.ambient)
@@ -124,11 +124,78 @@ local started = #(H.startedEvents or {})
 check(started > 3, 'voice lines played: ' .. started)
 check(overlap == 0, 'one voice line at a time (overlapping frames: ' .. overlap .. ')')
 check((H.unplaced or 0) == started, 'voice is not 3D (no position)')
+-- turning: the leans (flics 3 left, 4 right) go with the turn, the glances (5 left, 6 right) into it.
+-- The car turns right when its heading moves towards +x (front-left to front-right wheel).
+local heading = 0
+local function face(h)  -- the car's heading, and its wheels with it (FL, FR, RL, RR)
+  heading = h
+  local lx, lz, rx, rz = math.sin(h), math.cos(h), math.cos(h), -math.sin(h)
+  car.look:set(lx, 0, lz)
+  local p = car.position
+  for w, o in pairs({[0] = {-0.8, 1.4}, {0.8, 1.4}, {-0.8, -1.4}, {0.8, -1.4}}) do
+    car.wheels[w].position:set(p.x + rx * o[1] + lx * o[2], car.wheels[w].position.y, p.z + rz * o[1] + lz * o[2])
+  end
+end
+local function turnFor(n, rate)
+  for _ = 1, n do
+    local v = car.velocity:length()
+    face(heading + rate / 60)
+    car.velocity:set(car.look.x * v, 0, car.look.z * v)  -- driving where it points
+    run(1)
+  end
+end
+local function settle() face(0) car.localAngularVelocity:set(0, 0, 0) car.velocity:set(0, 0, 0) run(120) end
+settle()
+local function refAfter(n, rate) local seen = {} for _ = 1, n do turnFor(1, rate) seen[state().st.ref] = true end return seen end
+car.localAngularVelocity:set(0, 2, 0)                       -- spinning gently: C1's lean is flic 3 (left)
+H.storage.lean = 'away'
+local seen = refAfter(60, 2)
+check(state().st.ambient == 10 and seen[4] and not seen[3], 'spinning right, lean away: right lean only')
+H.storage.lean = 'into'
+seen = refAfter(60, 2)
+check(seen[3] and not seen[4] and state().st.ref == 3, 'spinning right, lean into: left lean only')
+seen = refAfter(60, -2)
+check(seen[4] and state().st.ref == 4, 'spinning left, lean into: right lean')
+H.storage.lean = 'away'
+settle()
+car.velocity:set(0, 0, 12)                                  -- 23-62 mph: C1's glance is flic 5 (left)
+seen = refAfter(90, 0.5)
+check(state().st.ambient == 1 and seen[6] and not seen[5], 'turning right: glances right')
+seen = refAfter(90, -0.5)
+check(seen[5] and state().st.ref == 5, 'turning left: glances left')
+face(0) run(90)
+check(state().st.ref == 5, 'straight on: C1\'s glance')
+settle()
+-- the driving flic (2, 5 frames of 100 ms) at 0 rpm: held where it is
+car.rpm, car.rpmMinimum, car.rpmLimiter = 900, 900, 7000
+for _ = 1, 120 do run(1) if state().st.ref == 2 and state().st.shownRef == 2 and state().st.shownFrame == 2 then break end end
+check(state().st.ref == 2 and state().st.shownFrame == 2, 'playing the driving flic')
+car.rpm = 0
+run(90)
+check(state().st.ref == 2 and state().st.shownRef == 2 and state().st.shownFrame == 2, '0 rpm: the driving flic holds its frame')
+car.rpm = 900
+local moved = false
+for _ = 1, 30 do run(1) if state().st.shownFrame ~= 2 then moved = true end end
+check(moved, 'engine running again: it plays on')
+-- its speed
+local p = state().st.period
+check(p(2) == 100 and p(1) == 50, 'original speed')
+H.storage.driveSpeed = 'rpm'
+check(math.abs(p(2) - 100) < 1e-6, 'with rpm: idle, as in the file')
+car.rpm = 7000 run(1)
+check(math.abs(p(2) - 100 / 3) < 1e-6 and p(1) == 50, 'with rpm: the limiter, 3x (only the driving flic)')
+H.storage.driveSpeed = 'speed'
+car.velocity:set(0, 0, 30) run(1)
+check(math.abs(p(2) - 50) < 1e-6, 'with ground speed: 30 m/s, 2x')
+H.storage.driveSpeed = 'original'
+car.rpm = nil
+settle()
 -- switching driver reloads
 -- the driver dropdown: Max Damage (1) or Die Anna (2); picking the other one reloads
 local shownAs
 local function pick(n)
   ui.combo = function(label, sel, flags, items)
+    if label ~= 'Driver' then return sel end
     assert(items[1] == 'Max Damage' and items[2] == 'Die Anna', 'dropdown items')
     shownAs = sel
     return n or sel
@@ -140,13 +207,13 @@ pick()
 check(shownAs == 1, 'dropdown shows Max Damage')
 pick(2)
 check(H.storage.driver == 'ANNIE', 'picking Die Anna switches')
-frames(10)
+for _ = 1, 200 do if state().data then break end frames(1) end
 check(state().data and not state().loadError, 'reloaded as Annie')
 pick()
 check(shownAs == 2, 'dropdown shows Die Anna')
 pick(1)
 check(H.storage.driver == 'FRANK', 'and back to Max Damage')
-frames(10)
+for _ = 1, 200 do if state().data then break end frames(1) end
 check(state().data and not state().loadError, 'reloaded')
 for _, l in ipairs(H.logs) do if l:find('pratcam') then print(l) end end
 print(fails == 0 and 'smoke test passed' or ('smoke test: ' .. fails .. ' failed'))
