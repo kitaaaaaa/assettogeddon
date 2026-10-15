@@ -28,6 +28,7 @@ assert(H.decoded > 0, 'textures decoded')
 -- drive both cars along the track at 25 m/s through the pedestrians for 20 s
 local rays0 = H.rays or 0
 local maxScreams = 0
+local kills0, timeShown = 0, {}
 for _ = 1, 1200 do
   for i = 0, 1 do
     local c = H.cars[i]
@@ -38,7 +39,13 @@ for _ = 1, 1200 do
   local screams = 0
   for _, p in ipairs(H.state().playing) do if not p.important then screams = screams + 1 end end
   maxScreams = math.max(maxScreams, screams)
+  -- C1's head-ups for the focused car (0): each of its kills earns 8 s (GENERAL.TXT's middle skill level)
+  local hu = H.state().headups
+  if hu.time then timeShown[#timeShown + 1] = hu.time.amount end
 end
+local timesOk, maxTime = #timeShown > 0, 0
+for _, t in ipairs(timeShown) do if t % 8 ~= 0 then timesOk = false end maxTime = math.max(maxTime, t) end
+check(timesOk, ('kills show C1\'s time per ped kill, 8 s each: %d frames shown, up to +%d'):format(#timeShown, maxTime))
 print('max screams at once: ' .. maxScreams)
 local raysPerFrame = ((H.rays or 0) - rays0) / 1200
 -- piledriver: car 0 runs a ped down at 15 m/s and goes straight into a wall with it on the front
@@ -86,6 +93,13 @@ for _, p in ipairs(st.peds) do if p.hitPoints < 0 then dead = dead + 1 end end
 print('dead: ' .. dead)
 check(dead > 0, 'cars killed some pedestrians')
 check(st.scores[0] and st.scores[0].kills > 0, 'kills scored for car 0')
+check((H.glyphs or 0) > 100, 'the HUD draws in C1\'s fonts: ' .. (H.glyphs or 0) .. ' letters')
+local pratEvents, lotsOk = 0, true
+for _, e in ipairs(H.shared) do
+  if e.name == 'carmapeds.pratcam' then pratEvents = pratEvents + 1 lotsOk = lotsOk and type(e.data.lots) == 'boolean' end
+end
+check(st.scores[0] and pratEvents == st.scores[0].kills and lotsOk,
+  ('each of the focused car\'s kills goes to the pratcam app: %d events, %d kills'):format(pratEvents, st.scores[0] and st.scores[0].kills or -1))
 check(raysPerFrame < 30, 'raycasts per frame stay low (' .. raysPerFrame .. ')')
 
 -- flagman: exactly one, beside the track at the start line (mock spline starts at z = -1000, 6 m sides),
@@ -248,6 +262,8 @@ do
   local c0 = creditsOf(0)
   H.jump(0) H.frame()
   check(creditsOf(0) - c0 == -4000, 'a reset costs 4000: ' .. (creditsOf(0) - c0))
+  local hu = H.state().headups.credits
+  check(hu and hu.amount == -4000, 'the reset shows as LOST 4000 CREDITS: ' .. tostring(hu and hu.amount))
   local popup = false
   for _, ev in ipairs(H.state().log.list) do if ev.kind == 4 and ev.n == -4000 then popup = true end end
   check(popup, 'the reset is a SCORE event of -4000')

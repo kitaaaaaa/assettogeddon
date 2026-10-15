@@ -3,6 +3,7 @@
 local c1text = require('src/c1text')
 local pix = require('src/pix')
 local peddata = require('src/peddata')
+local c1font = require('src/c1font')
 local soundbank = require('src/soundbank')
 
 local M = {}
@@ -50,6 +51,11 @@ local function generalTriple(text, method, phrase)
 end
 -- "Cunning stunt bonus for each skill level"
 function M.cunningStuntCredits(text, method) return generalTriple(text, method, 'cunning stunt') end
+-- "Time per ped kill for each skill level": seconds, the middle skill level's (as for the cunning stunt)
+function M.pedTimeValue(text, method)
+  local t = generalTriple(text, method, 'time per ped kill')
+  return t and t[2] or nil
+end
 -- "Recovery cost for each skill level": the highest (the hardest skill level)
 function M.recoveryCost(text, method)
   local t = generalTriple(text, method, 'recovery cost for each skill')
@@ -215,6 +221,8 @@ M.VERSIONS = {
 -- then so a coroutine can spread the work over frames. Returns data or nil, error.
 -- opts.robots: the German version's robot peds (BORING.TXT, its G* gibs) where the data has them.
 -- opts.version: a key of M.VERSIONS; that version's folder's files are used before the original's.
+M.HUD_FONTS = {'NEWBIGGR', 'NEWHITE', 'MEDIUMHD', 'BLUEHEAD'}
+
 function M.load(root, io, yield, opts)
   yield = yield or function() end
   opts = opts or {}
@@ -258,6 +266,7 @@ function M.load(root, io, yield, opts)
   out.method = c1text.detectMethod(general)
   out.cunningStunt = M.cunningStuntCredits(general, out.method)
   out.recoveryCost = M.recoveryCost(general, out.method)
+  out.pedTime = M.pedTimeValue(general, out.method)
   if not out.recoveryCost then
     out.recoveryCost = M.DEFAULT_RECOVERY_COST
     warn(('no "Recovery cost for each skill level" line in GENERAL.TXT: a reset costs %d'):format(out.recoveryCost))
@@ -422,6 +431,23 @@ function M.load(root, io, yield, opts)
     out.groups = M.raceGroups(out.races)
   else
     out.notes[#out.notes + 1] = 'no RACES.TXT: only "all pedestrians" to choose from'
+  end
+  -- C1's HUD fonts (the 640 x 480 ones): NEWBIGGR and NEWHITE for the credits and kills, MEDIUMHD for the
+  -- credits a kill earns, BLUEHEAD for its time (dethrace init.c, displays.c EarnCredits2 / AwardTime)
+  out.fonts = {}
+  for _, n in ipairs(M.HUD_FONTS) do
+    local base = data .. '/64X48X8/FONTS/' .. n
+    local txt = io.exists(base .. '.TXT') and io.read(base .. '.TXT')
+    local pixData = io.exists(base .. '.PIX') and io.read(base .. '.PIX')
+    local f = txt and c1font.parseMetrics(txt, out.method)
+    local m = pixData and pix.parse(pixData)[1]
+    local rgba = m and pix.toRGBA(m, out.palette)
+    if f and rgba and m.h >= f.height * f.count then
+      f.img = {w = m.w, h = m.h, rgba = rgba}
+      out.fonts[n] = f
+    else
+      warn('HUD font missing or unreadable: 64X48X8\\FONTS\\' .. n .. ' (plain text is shown instead)')
+    end
   end
   out.banners = {}
   for _, n in ipairs(M.BANNER_NAMES) do

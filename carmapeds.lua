@@ -4,6 +4,7 @@ local c1data = require('src/c1data')
 local pedlogic = require('src/pedlogic')
 local scoring = require('src/scoring')
 local png = require('src/png')
+local c1font = require('src/c1font')
 local rng = require('src/rng')
 local paths = require('src/paths')
 local explore = require('src/explore')
@@ -36,12 +37,13 @@ local data          -- loaded C1 data (c1data.load)
 local loadError     -- string
 local loader        -- coroutine while loading
 local textures = {} -- image name -> texture (ui.decodeImage)
+local fontTextures = {} -- C1 HUD font name -> {tex, font (c1font metrics)}
 local peds = {}     -- every ped; ids are the same on every client
 local pedsById = {}
 local cars = {}     -- per local car index: {state, prev..., wheels = {...}}
 local bloodTrails = {} -- {x1,y1,z1, x2,y2,z2, time}
 local bannerQueue = {} -- bonus banners waiting/showing (scoring.queueBanner)
-local popups = {}      -- {text, time}
+local headups = {}     -- C1's award head-ups for the focused car: credits = {amount, at}, time = {amount (s), at}
 local seed = 1
 local sendEventsData   -- online message buffer (set up once online)
 
@@ -50,8 +52,9 @@ local function countKeys(t) local n = 0 for _ in pairs(t) do n = n + 1 end retur
 
 -- ---------------------------------------------------------------------------------------------
 -- Loading
+local FONT_UPSCALE = 3
 local function startLoading()
-  data, loadError, textures, peds = nil, nil, {}, {}
+  data, loadError, textures, fontTextures, peds = nil, nil, {}, {}, {}
   loader = coroutine.create(function()
     local io_ = {
       exists = function(path) return io.fileExists(path) end,
@@ -100,6 +103,23 @@ local function startLoading()
       end
     end
     for img in pairs(made) do img.rgba = nil end
+    -- the HUD fonts, 3x bigger with no smoothing, so the pixels stay sharp when the HUD scales them
+    for name, f in pairs(d.fonts or {}) do
+      local K = FONT_UPSCALE
+      local rows = {}
+      for y = 0, f.img.h - 1 do
+        local px = {}
+        for x = 0, f.img.w - 1 do
+          local c = f.img.rgba:sub((y * f.img.w + x) * 4 + 1, (y * f.img.w + x) * 4 + 4)
+          for _ = 1, K do px[#px + 1] = c end
+        end
+        local row = table.concat(px)
+        for _ = 1, K do rows[#rows + 1] = row end
+      end
+      fontTextures[name] = {tex = ui.decodeImage(png.encode(f.img.w * K, f.img.h * K, table.concat(rows))), font = f}
+      f.img.rgba = nil
+      coroutine.yield()
+    end
     pedlogic.gibImages = d.gibs
     for _, w in ipairs(d.warnings) do log(w) end
     log(('loaded %d pedestrian types, %d images, %d sounds'):format(#d.peds, n, countKeys(d.sounds)))
@@ -585,7 +605,7 @@ end
 local TICK = 32  -- ms: whole milliseconds, so tick times are exactly the times events carry
 local simT        -- time of the last simulated tick
 local clockT = 0  -- this frame's clock
-local nowMs = 0   -- = clockT, for the visual parts (gibs, popups, banners)
+local nowMs = 0   -- = clockT, for the visual parts (gibs, banners)
 local sessionIndex
 
 -- ---------------------------------------------------------------------------------------------
@@ -656,13 +676,24 @@ local function localIndexOf(sid)
   return nil
 end
 
-local function showAward(sid, credits, bannerDef)
+-- C1's award head-ups (displays.c EarnCredits2, AwardTime): each shows for 2 s, and an award within 2 s of the
+-- last of its kind adds to it (gains to gains, losses to losses)
+local HEADUP_MS = 2000
+local function headupAdd(key, amount)
+  local now = os.preciseClock() * 1000
+  local h = headups[key]
+  if h and now - h.at < HEADUP_MS and (h.amount > 0) == (amount > 0) then amount = amount + h.amount end
+  headups[key] = {amount = amount, at = now}
+end
+-- kill: a ped killed, which also earns C1's time per ped kill (shown; AC's session can't be lengthened by an app)
+local function showAward(sid, credits, bannerDef, kill)
   if sid ~= carSid(sim.focusedCar) then return end
-  if credits > 0 then popups[#popups + 1] = {text = ('+%d'):format(credits), time = os.preciseClock() * 1000}
-  elseif credits < 0 then
-    popups[#popups + 1] = {text = ('%d RECOVERY'):format(credits), time = os.preciseClock() * 1000, colour = {1, 0.25, 0.15}}
-  end
+  if credits ~= 0 then headupAdd('credits', credits) end
+  if kill and data and (data.pedTime or 0) > 0 then headupAdd('time', data.pedTime) end
   if bannerDef then scoring.queueBanner(bannerQueue, bannerDef) end
+  -- for the Carmageddon Pratcam app: C1's driver reacts to a kill, more to one with a bonus (pedestrn.c plays
+  -- 'killed lots of peds' for all of them but extra style). One line: the BeamNG build comments it out.
+  if kill then ac.broadcastSharedEvent('carmapeds.pratcam', {lots = bannerDef ~= nil and bannerDef ~= scoring.BANNER.extraStyle}) end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -687,7 +718,7 @@ local function applyEvent(ev, own, quiet)
   if ev.kind == events.KILL then
     local s = scoreFor(ev.car)
     s.credits, s.kills = s.credits + ev.n, s.kills + 1
-    if not quiet then showAward(ev.car, ev.n, bannerFor(ev.f)) end
+    if not quiet then showAward(ev.car, ev.n, bannerFor(ev.f), true) end
     if ped and not own then pedlogic.applyKill(ped, events.killParams(ev), localIndexOf(ev.car), ev.t) ped.killerSid = ev.car end
   elseif ev.kind == events.CORPSE then
     if ped and not own then pedlogic.settleCorpse(ped, ev.x / 100, ev.y / 100, ev.z / 100, ev.t) end
@@ -784,7 +815,7 @@ end
 
 local function rebuild(T)
   pedlogic.gibs = {}
-  bloodTrails, popups, bannerQueue = {}, {}, {}
+  bloodTrails, headups, bannerQueue = {}, {}, {}
   scores = {}
   -- the cars' combo and stunt timing too (from another time: after a restart a stunt was refused as too soon)
   for _, c in pairs(cars) do c.state = scoring.newCarState() end
@@ -1425,12 +1456,72 @@ function script.fullscreenUI()
   if not data or not settings.hud then return end
   local c = scores[carSid(sim.focusedCar)]
   local screen = ui.windowSize()
-  local nowMs = os.preciseClock() * 1000  -- banners and popups run in real time (the session clock can jump)
-  if c then
+  local nowMs = os.preciseClock() * 1000  -- banners and head-ups run in real time (the session clock can jump)
+  local function text(s, x, y, w, h, size, col)
     ui.pushDWriteFont('Segoe UI;Weight=Bold')
-    ui.setCursor(vec2(screen.x - 420, 20))
-    ui.dwriteTextAligned(('CREDITS %d   KILLS %d'):format(c.credits, c.kills), 28, ui.Alignment.End, ui.Alignment.Start, vec2(400, 40), false, rgbm(1, 0.85, 0.1, 1))
+    ui.setCursor(vec2(x, y))
+    ui.dwriteTextAligned(s, size, ui.Alignment.Center, ui.Alignment.Center, vec2(w, h), false, col)
     ui.popDWriteFont()
+  end
+  local H = screen.y
+  -- C1's own fonts where the data has them (DRPixelmapCleverText2): a line of {font, text} parts, the parts
+  -- centred on each other's height, at C1's 640 x 480 size scaled to the screen; align 0 left, 0.5 centre.
+  -- Returns false (nothing drawn) when a font isn't there, for the plain text instead.
+  local px = H / 480
+  local function c1Line(parts, x, y, align)
+    local width, laid = 0, {}
+    for i, p in ipairs(parts) do
+      local ft = fontTextures[p[1]]
+      if not ft then return false end
+      local glyphs, w = c1font.layout(ft.font, p[2])
+      laid[i] = {ft = ft, glyphs = glyphs, x = width}
+      width = width + w + (i < #parts and ft.font.spacing or 0)
+    end
+    local x0 = x - width * px * align
+    local refH = fontTextures[parts[1][1]].font.height
+    for _, l in ipairs(laid) do
+      local f, tex = l.ft.font, l.ft.tex
+      local gy = y + math.floor((refH - f.height) / 2) * px
+      local imgH = f.height * f.count
+      for _, g in ipairs(l.glyphs) do
+        local gx = x0 + (l.x + g.x) * px
+        ui.drawImage(tex, vec2(gx, gy), vec2(gx + g.w * px, gy + f.height * px), rgbm(1, 1, 1, 1),
+          vec2(0, g.index * f.height / imgH), vec2(g.w / f.img.w, (g.index + 1) * f.height / imgH))
+      end
+    end
+    return true
+  end
+  -- credits and kills (C1: "<big>1250<white> PROFIT", "<big>12<white>/300 KILLS"), at the top in the fourth
+  -- fifth of the screen across
+  if c then
+    local cx = screen.x * 0.7
+    local profit = c.credits >= 0 and {c.credits, c.credits < 100000 and 'PROFIT' or 'PRFT'} or {-c.credits, 'LOSS'}
+    local shown = c1Line({{'NEWBIGGR', tostring(profit[1])}, {'NEWHITE', ' ' .. profit[2]}}, cx, H * 0.02, 0.5)
+    if shown and not settings.pedsOff then
+      c1Line({{'NEWBIGGR', tostring(c.kills)}, {'NEWHITE', ('/%d KILLS'):format(#peds)}}, cx, H * 0.02 + 20 * px, 0.5)
+    elseif not shown then
+      text(('CREDITS %d   KILLS %d'):format(c.credits, c.kills), screen.x * 0.6, H * 0.015, screen.x * 0.2, H * 0.05,
+        math.max(18, H * 0.035), rgbm(1, 0.85, 0.1, 1))
+    end
+  end
+  -- C1's award head-ups in the upper middle: the time earned (BLUEHEAD), the credits under it (MEDIUMHD), then
+  -- the bonus banner
+  local tH = headups.time
+  if tH and nowMs - tH.at < HEADUP_MS then
+    local secs = math.floor(tH.amount + 0.5)
+    local s = secs > 59 and ('+%d:%02d'):format(math.floor(secs / 60), secs % 60) or ('+%d'):format(secs)
+    if not c1Line({{'BLUEHEAD', s}}, screen.x / 2, H * 0.15, 0.5) then
+      text(s, 0, H * 0.15, screen.x, H * 0.06, math.max(18, H * 0.045), rgbm(0.35, 0.75, 1, 1))
+    end
+  end
+  local cH = headups.credits
+  if cH and nowMs - cH.at < HEADUP_MS then
+    local n = cH.amount
+    local s = n > 1 and ('%d CREDITS'):format(n) or n == 1 and '1 CREDIT'
+      or n < -1 and ('LOST %d CREDITS'):format(-n) or 'LOST 1 CREDIT'
+    if not c1Line({{'MEDIUMHD', s}}, screen.x / 2, H * 0.21, 0.5) then
+      text(s, 0, H * 0.21, screen.x, H * 0.06, math.max(18, H * 0.04), n > 0 and rgbm(1, 0.7, 0.15, 1) or rgbm(1, 0.25, 0.15, 1))
+    end
   end
   local def, t = scoring.currentBanner(bannerQueue, nowMs)
   if def then
@@ -1443,7 +1534,7 @@ function script.fullscreenUI()
       if t < 250 then x = screen.x - (screen.x / 2 + w / 2) * (t / 250)
       elseif t < 1750 then x = screen.x / 2 - w / 2
       else x = screen.x / 2 - w / 2 - (screen.x / 2 + w / 2) * ((t - 1750) / 250) end
-      local y = screen.y * 0.25
+      local y = screen.y * 0.3
       if tex then
         ui.drawImage(tex, vec2(x, y), vec2(x + w, y + h))
       else
@@ -1454,19 +1545,6 @@ function script.fullscreenUI()
       end
     end
   end
-  local keep = {}
-  for i, p in ipairs(popups) do
-    local t = nowMs - p.time
-    if t < 1500 then
-      ui.pushDWriteFont('Segoe UI;Weight=Bold')
-      ui.setCursor(vec2(screen.x - 420, 60 + (i - 1) * 4 - t / 30))
-      local col = p.colour or {1, 1, 1}
-      ui.dwriteTextAligned(p.text, 26, ui.Alignment.End, ui.Alignment.Start, vec2(400, 34), false, rgbm(col[1], col[2], col[3], 1 - t / 1500))
-      ui.popDWriteFont()
-      keep[#keep + 1] = p
-    end
-  end
-  popups = keep
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -1582,7 +1660,7 @@ pedlogic.mirrorBearings = settings.mirrorBearings
 if __carmapedsTest then
   __carmapedsTest.state = function()
     return {peds = peds, cars = cars, bannerQueue = bannerQueue, audioFiles = audioFiles, playing = playing, scores = scores, log = eventLog,
-      simT = simT, clockT = clockT, sendQueue = sendQueue}
+      simT = simT, clockT = clockT, sendQueue = sendQueue, headups = headups}
   end
 end
 startLoading()

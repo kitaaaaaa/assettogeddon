@@ -9,6 +9,9 @@ you put in the app's own folder, so it always uses the original files, whatever 
 
 There's also a BeamNG.drive version: see [beamng/README.md](beamng/README.md).
 
+And a separate app with Carmageddon's pratcam (Max Damage or Die Anna reacting to your driving, and to your
+kills when this app is running): see [pratcam/README.md](pratcam/README.md).
+
 ## Install
 
 1. Copy the `carmapeds` folder to `assettocorsa\apps\lua\` or drag the .zip file over Content Manager and install from the burger menu.
@@ -82,9 +85,17 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
     the original data). 
 
   Banners queue up and show one after another, 2 s each (up to 4 waiting).
+
+  The HUD is in Carmageddon's own fonts (`DATA\64X48X8\FONTS`), at their size on C1's 640 x 480 screen
+  scaled to yours. Along the top, in the fourth fifth of the screen across, the credits ("12450 PROFIT", or
+  LOSS) and kills ("37/300 KILLS", of all the peds on the track), as C1 shows them. Above the banners, each
+  award for 2 s: the credits earned ("250 CREDITS"), and above them the time a kill earns in C1 (GENERAL.TXT's
+  time per ped kill for the middle skill level: +8 s in the original data). An award within 2 s of the last one
+  adds to it. The time is only shown: an app can't lengthen an AC session. Without the fonts, the same is shown
+  in plain text.
 - **Resets cost credits**, as in C1, where recovering the car also repairs it: going back to the pits, or CSP's
   reset to the road or in place, costs GENERAL.TXT's recovery cost for the hardest skill level (4000 in the
-  original data), shown in red under the credits. Not before the start, nor in a session's first 3 s.
+  original data), shown as "LOST 4000 CREDITS". Not before the start, nor in a session's first 3 s.
 
 ## Approximations
 

@@ -20,11 +20,22 @@ end
 local function pixFile(w, h, fill, name) return chunk(0x12, be32(2) .. be32(2)) .. pixMap(w, h, fill, name) end
 
 local D = root .. '/DATA'
-for _, d in ipairs({D, D .. '/REG/PALETTES', D .. '/SOUND', D .. '/64X48X8/PIXELMAP'}) do mkdir(d) end
+for _, d in ipairs({D, D .. '/REG/PALETTES', D .. '/SOUND', D .. '/64X48X8/PIXELMAP', D .. '/64X48X8/FONTS'}) do mkdir(d) end
+
+-- the HUD fonts: NAME.TXT (height, width -1 = proportional, spacing, offset, count, widths), glyphs stacked
+-- in NAME.PIX. Plain text here (the real ones are '@' lines).
+for _, f in ipairs({{'NEWBIGGR', 17, 48, 10}, {'NEWHITE', 12, 32, 96}, {'MEDIUMHD', 22, 32, 96}, {'BLUEHEAD', 18, 32, 96}}) do
+  local name, h, offset, count = f[1], f[2], f[3], f[4]
+  local widths = {}
+  for i = 1, count do widths[i] = tostring(4 + i % 5) end
+  write(D .. '/64X48X8/FONTS/' .. name .. '.TXT', ('%d\r\n-1\r\n1\r\n%d\r\n%d\r\n%s\r\n'):format(h, offset, count, table.concat(widths, '\r\n')))
+  write(D .. '/64X48X8/FONTS/' .. name .. '.PIX', pixFile(8, h * count, 7, name))
+end
 
 -- encrypted GENERAL.TXT first line, method 2 (doesn't decode to "0.01\t\t" with method 1)
 write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n2000,1500,500\t\t// Cunning stunt bonus for each skill level\r\n'
-  .. '1000, 2000, 4000\t\t// Recovery cost for each skill level\r\n')
+  .. '1000, 2000, 4000\t\t// Recovery cost for each skill level\r\n'
+  .. '20,8,5\t\t\t\t// Time per ped kill for each skill level\r\n')
 
 local pal = {}
 for i = 0, 255 do pal[#pal + 1] = string.char(0, i, (i * 3) % 256, 255 - i) end

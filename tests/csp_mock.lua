@@ -4,7 +4,7 @@
 --   options: {dataDir, online = bool, mySid = 0, sids = {[index] = sid}, direct = bool}
 return function(opts)
   opts = opts or {}
-  local H = {logs = {}, cars = {}, outbox = {}, wrapped = {}, quads = 0, decoded = 0, audioCreated = 0, time = 0,
+  local H = {logs = {}, shared = {}, cars = {}, outbox = {}, wrapped = {}, quads = 0, decoded = 0, audioCreated = 0, time = 0,
     online = {created = 0, attempts = 0, refused = 0, lastSent = -1e9, layouts = {}}}
 
   -- ---- vectors ---------------------------------------------------------------------------------
@@ -116,6 +116,8 @@ return function(opts)
       return {getWorldTransformationRaw = function() return m or nil end}
     end,
     getDriverName = function(i) return 'Driver ' .. i end,
+    -- events to other Lua apps (H.shared: {name, data} in order)
+    broadcastSharedEvent = function(name, data) H.shared[#H.shared + 1] = {name = name, data = data} end,
     -- car resets: H.jump(i) calls them as CSP does when car i is teleported (pits, road, in place)
     onCarJumped = function(i, cb) H.jumpCallbacks[i] = H.jumpCallbacks[i] or {} table.insert(H.jumpCallbacks[i], cb) end,
     StructItem = S,
@@ -214,7 +216,13 @@ return function(opts)
     windowSize = function() return vec2(1920, 1080) end,
     pushDWriteFont = function() end, popDWriteFont = function() end, setCursor = function() end,
     dwriteTextAligned = function(text) assert(type(text) == 'string') end,
-    drawImage = function(tex, a, b) assert(tex and a.x and b.x) end,
+    drawImage = function(tex, a, b, col, uv1, uv2)
+      assert(tex and a.x and b.x)
+      if uv1 then
+        assert(uv2 and uv1.x >= 0 and uv2.y <= 1 and uv1.y < uv2.y and uv1.x < uv2.x, 'image uvs')
+        H.glyphs = (H.glyphs or 0) + 1
+      end
+    end,
     Alignment = {Start = 0, Center = 1, End = 2},
     text = function(s) assert(type(s) == 'string') H.lastText = s end,
     textColored = function(s) assert(type(s) == 'string') end,

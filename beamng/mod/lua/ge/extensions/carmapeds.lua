@@ -621,10 +621,12 @@ local ui = {
     im.TextColored(im.ImVec4(c.r or 1, c.g or 1, c.b or 1, c.mult or 1), esc(text))
     im.SetWindowFontScale(1)
   end,
-  drawImage = function(tex, p1, p2)
+  -- uv1, uv2: the part of the image (the HUD fonts draw each letter from one image)
+  drawImage = function(tex, p1, p2, color, uv1, uv2)
     if not hud.dl or type(tex) ~= 'table' then return end
     im.ImDrawList_AddImage(hud.dl, texHandle(tex.path):getID(), im.ImVec2(p1.x, p1.y), im.ImVec2(p2.x, p2.y),
-      im.ImVec2(0, 0), im.ImVec2(1, 1), im.GetColorU322(im.ImVec4(1, 1, 1, 1)))
+      im.ImVec2(uv1 and uv1.x or 0, uv1 and uv1.y or 0), im.ImVec2(uv2 and uv2.x or 1, uv2 and uv2.y or 1),
+      im.GetColorU322(im.ImVec4(1, 1, 1, 1)))
   end,
 }
 
