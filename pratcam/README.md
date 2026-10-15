@@ -53,8 +53,9 @@ Turns (changes from the game, which picks these at random or by the side of a sl
 - **Glances aside**: the occasional look left or right while driving looks into the turn when the car is
   turning; driving straight, it's the game's random pick.
 
-The driving animation (the engine rumble) can run at the game's speed, or faster with the engine's rpm (idle:
-the game's speed, the limiter: 3x) or with the car's speed (stopped: the game's speed, 60 m/s: 3x). With the
+The driving animation (the engine rumble) can run at the game's speed, or with the engine's rpm (idle: a quarter
+of the game's speed, the limiter: the game's speed) or with the car's speed (stopped: a quarter, 60 m/s and
+over: the game's speed). With the
 engine at 0 rpm it stops on the frame it's at, until the engine runs again or something else happens.
 
 Voice lines play one at a time: one that comes while another is playing is skipped, as in the game. The

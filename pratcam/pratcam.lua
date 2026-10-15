@@ -167,15 +167,15 @@ local rayPos, rayDown = vec3(), vec3(0, -1, 0)
 
 local function resetCar() car = {} end
 
--- The driving animation's speed: as in the file, or with the engine (idle: as in the file, the limiter: 3x) or
--- the ground speed (stopped: as in the file, 60 m/s: 3x).
+-- The driving animation's speed: as in the file, or with the engine (idle: a quarter of it, the limiter: as in
+-- the file) or the ground speed (stopped: a quarter, 60 m/s: as in the file).
 driveRate = function()
   if settings.driveSpeed == 'rpm' and car.rpm then
     local idle = (car.rpmMinimum or 0) > 0 and car.rpmMinimum or 900
     local limit = (car.rpmLimiter or 0) > idle and car.rpmLimiter or idle + 6000
-    return 1 + 2 * math.max(0, math.min(1, (car.rpm - idle) / (limit - idle)))
+    return 0.25 + 0.75 * math.max(0, math.min(1, (car.rpm - idle) / (limit - idle)))
   elseif settings.driveSpeed == 'speed' and car.speed then
-    return 1 + 2 * math.min(1, car.speed / 60)
+    return 0.25 + 0.75 * math.min(1, car.speed / 60)
   end
   return 1
 end
@@ -357,7 +357,7 @@ function script.windowSettings(dt)
   if leans[pick] then settings.lean = leans[pick] end
   local speeds = {'original', 'rpm', 'speed'}
   at = settings.driveSpeed == 'rpm' and 2 or settings.driveSpeed == 'speed' and 3 or 1
-  pick = ui.combo('Driving animation', at, ui.ComboFlags.None, {'Original speed', 'Faster with engine rpm', 'Faster with ground speed'})
+  pick = ui.combo('Driving animation', at, ui.ComboFlags.None, {'Original speed', 'With engine rpm', 'With ground speed'})
   if speeds[pick] then settings.driveSpeed = speeds[pick] end
 end
 

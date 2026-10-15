@@ -181,12 +181,16 @@ check(moved, 'engine running again: it plays on')
 local p = state().st.period
 check(p(2) == 100 and p(1) == 50, 'original speed')
 H.storage.driveSpeed = 'rpm'
-check(math.abs(p(2) - 100) < 1e-6, 'with rpm: idle, as in the file')
+check(math.abs(p(2) - 400) < 1e-6, 'with rpm: idle, a quarter of the speed')
 car.rpm = 7000 run(1)
-check(math.abs(p(2) - 100 / 3) < 1e-6 and p(1) == 50, 'with rpm: the limiter, 3x (only the driving flic)')
+check(math.abs(p(2) - 100) < 1e-6 and p(1) == 50, 'with rpm: the limiter, the file\'s speed (only the driving flic)')
 H.storage.driveSpeed = 'speed'
 car.velocity:set(0, 0, 30) run(1)
-check(math.abs(p(2) - 50) < 1e-6, 'with ground speed: 30 m/s, 2x')
+check(math.abs(p(2) - 160) < 1e-6, 'with ground speed: 30 m/s, 5/8 of the speed')
+car.velocity:set(0, 0, 0) run(1)
+check(math.abs(p(2) - 400) < 1e-6, 'with ground speed: stopped, a quarter')
+car.velocity:set(0, 0, 80) run(1)
+check(math.abs(p(2) - 100) < 1e-6, 'with ground speed: over 60 m/s, the file\'s speed')
 H.storage.driveSpeed = 'original'
 car.rpm = nil
 settle()
