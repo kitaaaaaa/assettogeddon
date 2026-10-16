@@ -276,6 +276,31 @@ do
   check(creditsOf(0) == c0, 'no reset cost in the first seconds')
 end
 
+-- repairs (the Soft Body Damage app's "repair slowly"): charged at GENERAL.TXT's repair cost, the hardest skill
+-- level's (30 credits a per cent of damage), in whole credits as they add up; with "repairs need credits", Soft
+-- Body Damage is told to stop while the car has none
+do
+  local c0 = creditsOf(0)
+  H.sendShared('softdamage.repair', {car = 0, repaired = 10, damage = 5}) H.frame()
+  check(creditsOf(0) - c0 == -300, '10% repaired costs 300: ' .. (creditsOf(0) - c0))
+  c0 = creditsOf(0)
+  for _ = 1, 5 do H.sendShared('softdamage.repair', {car = 0, repaired = 0.01, damage = 1}) H.frame() end
+  check(creditsOf(0) - c0 == -1, 'small steps add up to whole credits (5 x 0.3 = 1, 0.5 left): ' .. (creditsOf(0) - c0))
+  H.sendShared('softdamage.repair', {car = 0, repaired = 'x'}) H.sendShared('softdamage.repair', nil) H.frame()
+  local function blockedSaid()
+    local last
+    for _, e in ipairs(H.shared) do if e.name == 'softdamage.repairBlocked' and e.data.car == 0 then last = e.data.blocked end end
+    return last
+  end
+  check(blockedSaid() == nil, 'repairs aren\'t stopped by default (a loss, as with resets)')
+  H.storage.repairsNeedCredits = true
+  H.frame()
+  check(creditsOf(0) <= 0 and blockedSaid() == true, 'with repairs needing credits, none left (' .. creditsOf(0) .. '): Soft Body Damage told to stop')
+  H.storage.repairsNeedCredits = false
+  H.frame()
+  check(blockedSaid() ~= true, 'and told it may go on when that\'s off')
+end
+
 -- turned down, the flagman and grid girls are the last peds (this track: the flagman and 5 grid girls)
 local function pedsWith(total, extra)
   H.storage.pedsPerKm = total / 2

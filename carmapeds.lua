@@ -25,6 +25,7 @@ local settings = ac.storage{
   pedGroup = 'all', -- which ped types: 'all', or a group of C1's races (c1data.raceGroups) by its key
   robots = false,   -- the German version's robots (BORING.TXT), when the data has them
   dataVersion = 'original', -- or 'uk' / 'german': DATA\UK or DATA\GERMAN's files before the original's
+  repairsNeedCredits = false, -- Soft Body Damage's slow repairs stop when the car's credits run out
 }
 
 local U = pedlogic.U
@@ -881,6 +882,33 @@ local function chargeResets(c)
   scoreEvent(c, -(data.recoveryCost or c1data.DEFAULT_RECOVERY_COST), nil)
 end
 
+-- Repairs: with the Soft Body Damage app, holding its "repair slowly" button puts the car's dents right a bit at a
+-- time, and C1 charges for repairs by the per cent of damage put right (GENERAL.TXT's repair cost, the hardest
+-- skill level's: 30 credits a per cent in the original data). Soft Body Damage tells how much it repaired
+-- ('softdamage.repair': {car, repaired, damage}, per cents of a wrecked car); this charges that car for it, in
+-- whole credits as they add up (shown as LOST ... CREDITS). With "repairs need credits" on, it tells Soft Body
+-- Damage to stop while the car has none ('softdamage.repairBlocked': {car, blocked}).
+local repairOwed, repairBlockedSent = {}, {}
+if ac.onSharedEvent then
+  ac.onSharedEvent('softdamage.repair', function(ev)
+    if type(ev) ~= 'table' or type(ev.car) ~= 'number' or type(ev.repaired) ~= 'number' or ev.repaired <= 0 then return end
+    repairOwed[ev.car] = (repairOwed[ev.car] or 0) + ev.repaired * ((data and data.repairCost) or c1data.DEFAULT_REPAIR_COST)
+  end)
+end
+local function chargeRepairs(c)
+  local owed = repairOwed[c.index]
+  if owed and owed >= 1 then
+    local n = math.floor(owed)
+    repairOwed[c.index] = owed - n
+    if c.decides then scoreEvent(c, -n, nil) end
+  end
+  local blocked = settings.repairsNeedCredits and c.decides and scoreFor(c.sid).credits <= 0 or false
+  if blocked ~= (repairBlockedSent[c.index] or false) then
+    repairBlockedSent[c.index] = blocked
+    if ac.broadcastSharedEvent then ac.broadcastSharedEvent('softdamage.repairBlocked', {car = c.index, blocked = blocked}) end
+  end
+end
+
 local RICOCHET_MS, NICE_SHOT_SLIP, NICE_SHOT_YAW = 2000, 20, 1.5  -- ms; degrees; rad/s
 local MAX_CLOCK = 1e9  -- ms (11 days): session clocks beyond this aren't real
 local wasReplaying = false
@@ -1306,6 +1334,7 @@ function script.update(dt)
           onGround = gy ~= nil and c.y - c.halfH - gy < 0.6}, clockT)
         scoreEvent(c, credits, b)
         chargeResets(c)
+        chargeRepairs(c)
       end
     end
   end
@@ -1640,6 +1669,9 @@ function script.windowSettings(dt)
   slider('volume', 'Volume: %.0f%%', 0, 100, 100)
   slider('brightness', 'Sprite brightness: %.0f%%', 10, 300, 100)
   if ui.checkbox('Show credits and bonus banners', settings.hud) then settings.hud = not settings.hud end
+  if ui.checkbox('Soft Body Damage repairs need credits (stop at none)', settings.repairsNeedCredits) then
+    settings.repairsNeedCredits = not settings.repairsNeedCredits
+  end
   ui.separator()
   ui.text('If sprites look wrong:')
   if ui.checkbox('Mirror sprites left/right', settings.mirrorSprites) then settings.mirrorSprites = not settings.mirrorSprites end

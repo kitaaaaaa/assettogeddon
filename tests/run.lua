@@ -182,6 +182,7 @@ if fake then
     read = function(p) local f = io.open(p, 'rb') if not f then return nil end local s = f:read('*a') f:close() return s end}
   local d = assert(c1data.load(fake, fio))
   check(d.recoveryCost == 4000, 'recovery cost: the highest skill level\'s: ' .. tostring(d.recoveryCost))
+  check(d.repairCost == 30, 'repair cost: the highest skill level\'s, credits a per cent: ' .. tostring(d.repairCost))
   check(#d.races == 3 and d.races[1].name == 'Town Race' and d.races[2].file == 'MINEA1.TXT', 'race list read')
   local r1, r2 = d.races[1].refs, d.races[2].refs
   check(r1 and r1[1] == 2 and r1[99] == 1 and r1[19] == 1 and not r1[2], 'town race peds')

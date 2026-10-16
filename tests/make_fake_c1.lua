@@ -34,6 +34,7 @@ end
 
 -- encrypted GENERAL.TXT first line, method 2 (doesn't decode to "0.01\t\t" with method 1)
 write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n2000,1500,500\t\t// Cunning stunt bonus for each skill level\r\n'
+  .. '10,20,30\t\t\t\t\t// Repair cost for each skill level (cred per % damage)\r\n'
   .. '1000, 2000, 4000\t\t// Recovery cost for each skill level\r\n'
   .. '20,8,5\t\t\t\t// Time per ped kill for each skill level\r\n')
 

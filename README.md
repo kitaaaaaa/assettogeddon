@@ -93,6 +93,11 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   time per ped kill for the middle skill level: +8 s in the original data). An award within 2 s of the last one
   adds to it. The time is only shown: an app can't lengthen an AC session. Without the fonts, the same is shown
   in plain text.
+- **Repairs cost credits**, with the **Soft Body Damage** app (visual dents for AC): holding its "repair slowly"
+  button puts the car's dents right a bit at a time, and Carmapeds charges for it as C1 does, by the per cent of
+  damage put right, at GENERAL.TXT's repair cost for the hardest skill level (30 credits a per cent in the
+  original data), shown as LOST ... CREDITS. Like resets, repairs can take you into a loss; with **Soft Body
+  Damage repairs need credits** on, they stop when you have none.
 - **Resets cost credits**, as in C1, where recovering the car also repairs it: going back to the pits, or CSP's
   reset to the road or in place, costs GENERAL.TXT's recovery cost for the hardest skill level (4000 in the
   original data), shown as "LOST 4000 CREDITS". Not before the start, nor in a session's first 3 s.

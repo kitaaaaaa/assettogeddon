@@ -118,6 +118,8 @@ return function(opts)
     getDriverName = function(i) return 'Driver ' .. i end,
     -- events to other Lua apps (H.shared: {name, data} in order)
     broadcastSharedEvent = function(name, data) H.shared[#H.shared + 1] = {name = name, data = data} end,
+    -- and from them: H.sendShared(name, data) calls what the app listens with
+    onSharedEvent = function(name, cb) H.sharedListeners[name] = H.sharedListeners[name] or {} table.insert(H.sharedListeners[name], cb) end,
     -- car resets: H.jump(i) calls them as CSP does when car i is teleported (pits, road, in place)
     onCarJumped = function(i, cb) H.jumpCallbacks[i] = H.jumpCallbacks[i] or {} table.insert(H.jumpCallbacks[i], cb) end,
     StructItem = S,
@@ -254,6 +256,8 @@ return function(opts)
   function H.state() return __carmapedsTest.state() end
   H.jumpCallbacks = {}
   function H.jump(i) for _, cb in ipairs(H.jumpCallbacks[i] or {}) do cb(i) end end
+  H.sharedListeners = {}
+  function H.sendShared(name, data) for _, cb in ipairs(H.sharedListeners[name] or {}) do cb(data) end end
 
   -- One frame of dt seconds. The session clock advances unless in a replay (the test sets the stream then).
   H.recording = {}

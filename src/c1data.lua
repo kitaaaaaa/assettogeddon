@@ -24,6 +24,7 @@ M.ROBOT_GIB_NAMES = {
 }
 M.DEFAULT_BLOOD = {0.35, 0, 0}
 M.DEFAULT_RECOVERY_COST = 4000  -- GENERAL.TXT's highest skill level, if the line isn't found
+M.DEFAULT_REPAIR_COST = 30      -- credits per % of damage repaired: GENERAL.TXT's highest skill level, the same
 M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX', '2XCOMBO.PIX', '3XCOMBO.PIX',
   '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX'}
 M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVING_BASTARD_REF)
@@ -59,6 +60,12 @@ end
 -- "Recovery cost for each skill level": the highest (the hardest skill level)
 function M.recoveryCost(text, method)
   local t = generalTriple(text, method, 'recovery cost for each skill')
+  return t and math.max(t[1], t[2], t[3]) or nil
+end
+
+-- "Repair cost for each skill level (cred per % damage)": the highest, as for the recovery cost
+function M.repairCost(text, method)
+  local t = generalTriple(text, method, 'repair cost for each skill')
   return t and math.max(t[1], t[2], t[3]) or nil
 end
 
@@ -266,7 +273,12 @@ function M.load(root, io, yield, opts)
   out.method = c1text.detectMethod(general)
   out.cunningStunt = M.cunningStuntCredits(general, out.method)
   out.recoveryCost = M.recoveryCost(general, out.method)
+  out.repairCost = M.repairCost(general, out.method)
   out.pedTime = M.pedTimeValue(general, out.method)
+  if not out.repairCost then
+    out.repairCost = M.DEFAULT_REPAIR_COST
+    warn(('no "Repair cost for each skill level" line in GENERAL.TXT: repairs cost %d a %%%% of damage'):format(out.repairCost))
+  end
   if not out.recoveryCost then
     out.recoveryCost = M.DEFAULT_RECOVERY_COST
     warn(('no "Recovery cost for each skill level" line in GENERAL.TXT: a reset costs %d'):format(out.recoveryCost))
