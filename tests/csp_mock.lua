@@ -1,7 +1,7 @@
 -- A mock of the parts of the CSP Lua API the app uses, for running carmapeds.lua offline.
 -- Session clock, wall clock, replay stream and online messages are all under the test's control.
 -- local H = require('tests/csp_mock')(options); H.load(); H.frame()...
---   options: {dataDir, online = bool, mySid = 0, sids = {[index] = sid}, direct = bool}
+--   options: {dataDir, online = bool, mySid = 0, sids = {[index] = sid}, direct = bool, tracksDir}
 return function(opts)
   opts = opts or {}
   local H = {logs = {}, shared = {}, cars = {}, outbox = {}, wrapped = {}, quads = 0, decoded = 0, audioCreated = 0, time = 0,
@@ -101,6 +101,9 @@ return function(opts)
     getCar = function(i) return H.cars[i] end,
     log = function(...) local t = {} for i = 1, select('#', ...) do t[i] = tostring(select(i, ...)) end H.logs[#H.logs + 1] = table.concat(t, ' ') end,
     getTrackFullID = function(sep) return 'ks_test' .. sep .. 'layout' end,
+    -- opts.tracksDir: the content/tracks folder (a converted C1 track keeps its race in data/carmageddon.ini)
+    FolderID = {ContentTracks = 15},
+    getFolder = function(id) return id == 15 and (opts.tracksDir or '/nonexistent/tracks') or '/nonexistent' end,
     -- opts.noSpline: a map without an AI line (every progress gives the same point)
     trackProgressToWorldCoordinate = function(p) return opts.noSpline and vec3(0, 0, 0) or vec3(0, 0, p * 2000 - 1000) end,
     getTrackAISplineSides = function(p) return vec2(6, 6) end,

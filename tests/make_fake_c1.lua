@@ -36,7 +36,8 @@ end
 write(D .. '/GENERAL.TXT', '@' .. c1text.decode('0.02\t\tsomething', 2) .. '\r\n2000,1500,500\t\t// Cunning stunt bonus for each skill level\r\n'
   .. '10,20,30\t\t\t\t\t// Repair cost for each skill level (cred per % damage)\r\n'
   .. '1000, 2000, 4000\t\t// Recovery cost for each skill level\r\n'
-  .. '20,8,5\t\t\t\t// Time per ped kill for each skill level\r\n')
+  .. '20,8,5\t\t\t\t// Time per ped kill for each skill level\r\n'
+  .. '2000,500,50\t\t\t// Credits awarded for checkpoints for each skill level (with peds)\r\n')
 
 local pal = {}
 for i = 0, 255 do pal[#pal + 1] = string.char(0, i, (i * 3) % 256, 255 - i) end
@@ -45,7 +46,7 @@ write(D .. '/REG/PALETTES/DRRENDER.PAL', chunk(0x12, be32(2) .. be32(2))
   .. chunk(0x21, be32(256) .. be32(4) .. table.concat(pal)))
 
 local sound = {}
-for _, id in ipairs({4000, 4001, 4020, 4100, 4200}) do
+for _, id in ipairs({4000, 4001, 4020, 4100, 4200, 8011, 8012, 8013, 8014}) do
   sound[#sound + 1] = ('%d\n0,1\nS%d.WAV\n5\n1\n255,255\n1,1\n1,1\n0\n0\n'):format(id, id)
   -- a real PCM WAV header: 22050 Hz mono 8-bit, 0.5 s of silence
   local function le32(v) return string.char(v % 256, math.floor(v / 256) % 256, math.floor(v / 65536) % 256, math.floor(v / 16777216) % 256) end
@@ -121,6 +122,19 @@ end
 write(D .. '/RACES/TOWNA1.TXT', raceFile({1, 1, 99, 19}))
 write(D .. '/RACES/MINEA1.TXT', raceFile({2, 2}))
 write(D .. '/RACES/MINEB2.TXT', raceFile({2, 1}))
+-- a race as a converted track reads it (c1data.parseRaceLayout): 2 laps, two checkpoints across the z axis
+-- (z = 10 and z = 60, x -5..5, in C1 units), two peds of type 1 walking routes, and a power-up (ref 120)
+write(D .. '/RACES/TRACKA1.TXT', table.concat({
+  'VERSION 6', '0,0,0 // grid', '180 // yaw', '180,90,30', '2 // laps', '20000,10000,5000', '75000,50000,30000',
+  '20000,10000,5000', '9,18', '11,26', '2 // checkpoints',
+  '20,10,5', '60,30,10', '1', '-5,-100,10', '-5,100,10', '5,100,10', '5,-100,10', '1,2', '3,4',
+  '20,10,5', '60,30,10', '1', '-5,-100,60', '-5,100,60', '5,100,60', '5,-100,60', '1,2', '3,4',
+  '5 // pixelmaps', 'A.PIX', 'START OF FUNK', 'END OF FUNK', 'START OF GROOVE', 'END OF GROOVE',
+  '3 // ped subs', '3 // peds',
+  '1', '4', '2', 'point', '20,0,0', 'point', '20,0,4', 'point', '24,0,4', 'reverse',
+  '1', '2', '1', 'point', '-20,1000,30', 'reverse',  -- y >= 500: on the ground, 1000 lower
+  '120', '2', '1', 'point', '0,0,5', 'reverse',
+  'START OF OPPONENT PATHS'}, '\r\n') .. '\r\n')
 
 local P = D .. '/64X48X8/PIXELMAP/'
 -- as in the real data, all of a ped's frames are named pixelmaps in one file (PED.PIX); names stored

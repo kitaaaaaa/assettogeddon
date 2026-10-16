@@ -14,6 +14,8 @@ M.BANNER = {
   combo5 = {index = 7, image = '5XCOMBO.PIX', text = '5X COMBO BONUS'},
   niceShot = {index = 8, image = 'BILLIARD.PIX', text = 'NICE SHOT, SIR!'},
   cunningStunt = {index = 9, image = 'POLITE.PIX', text = 'CUNNING STUNT BONUS'},
+  checkpoint = {index = 12, image = 'CHECKPNT.PIX', text = 'CHECKPOINT!'},
+  raceCompleted = {index = 14, image = 'RACEOVER.PIX', text = 'RACE COMPLETED'},
 }
 
 function M.bannerByIndex(index)

@@ -26,7 +26,7 @@ M.DEFAULT_BLOOD = {0.35, 0, 0}
 M.DEFAULT_RECOVERY_COST = 4000  -- GENERAL.TXT's highest skill level, if the line isn't found
 M.DEFAULT_REPAIR_COST = 30      -- credits per % of damage repaired: GENERAL.TXT's highest skill level, the same
 M.BANNER_NAMES = {'SPLATTER.PIX', 'PILEDRIV.PIX', 'EXTRASTY.PIX', 'ARTISTIC.PIX', '2XCOMBO.PIX', '3XCOMBO.PIX',
-  '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX'}
+  '4XCOMBO.PIX', '5XCOMBO.PIX', 'BILLIARD.PIX', 'POLITE.PIX', 'CHECKPNT.PIX', 'RACEOVER.PIX'}
 M.FLAGMAN_REF = 99  -- the flag-waving ped at the start line (dethrace FLAG_WAVING_BASTARD_REF)
 -- Frames PEDESTRN.TXT names wrongly, and the ped's own file's frame used instead: ref -> {name -> name}.
 -- Ped 19's file has RIDSHK1/RIDSHK2 and RIDSTL2, the data asks for RIDSHK and RIDSTIL2 (so C1 never used her).
@@ -67,6 +67,13 @@ end
 function M.repairCost(text, method)
   local t = generalTriple(text, method, 'repair cost for each skill')
   return t and math.max(t[1], t[2], t[3]) or nil
+end
+
+-- "Credits awarded for checkpoints for each skill level": the middle skill level's (as for the cunning stunt)
+M.DEFAULT_CHECKPOINT_CREDITS = 500
+function M.checkpointCredits(text, method)
+  local t = generalTriple(text, method, 'credits awarded for checkpoints')
+  return t and t[2] or nil
 end
 
 local function trim(s) return (s:gsub('[ \t]+$', '')) end
@@ -125,6 +132,80 @@ function M.parseRacePeds(text, method)
     end
   end
   return refs
+end
+
+-- What a converted C1 track needs from its race file (racestrt.c / loading.c LoadRace, pedestrn.c
+-- LoadInPedestrians), in C1 world units: the lap count, the "race completed (all laps)" bonus for each skill
+-- level, the checkpoints ({quads = {{4 points}}}, the car passes one through a quad) and each ped's route:
+-- {ref, initial (1-based instruction to start at), points = {{x, y, z}}, reverse}. Refs of 100 and above
+-- are power-ups, left out. Returns the layout, or nil and why.
+function M.parseRaceLayout(text, method)
+  local r = c1text.reader(text, method)
+  local function nums()
+    local l = r:line()
+    if not l then return nil end
+    local t = c1text.tokens(l)
+    for i = 1, #t do t[i] = tonumber(t[i]) end
+    return t
+  end
+  local first = r:line()
+  if not first then return nil, 'empty' end
+  local t = c1text.tokens(first)
+  local version = t[1] == 'VERSION' and tonumber(t[2]) or 0
+  if version == 0 then return nil, 'no VERSION line' end
+  local out = {version = version, checkpoints = {}, peds = {}}
+  out.grid = nums()
+  out.gridYaw = (nums() or {})[1]
+  nums()                               -- initial timer
+  out.laps = (nums() or {})[1]
+  out.lapsBonus = nums()
+  nums() nums()                        -- all peds killed, all opponents wasted bonuses
+  if version >= 2 then nums() nums() end  -- map checkpoint marker sizes
+  local count = (nums() or {})[1]
+  if not count or not out.laps then return nil, 'no checkpoints' end
+  for i = 1, count do
+    nums() nums()                      -- timer increments
+    local cp = {quads = {}}
+    for q = 1, (nums() or {})[1] or 0 do
+      local quad = {}
+      for k = 1, 4 do
+        local p = nums()
+        if not p or not p[3] then return nil, ('checkpoint %d: bad point'):format(i) end
+        quad[k] = {p[1], p[2], p[3]}
+      end
+      cp.quads[q] = quad
+    end
+    if version >= 2 then nums() nums() end  -- its marker on the map
+    out.checkpoints[i] = cp
+  end
+  repeat
+    local l = r:line()
+    if not l then return nil, 'no END OF GROOVE line' end
+  until trim(l) == 'END OF GROOVE'
+  if version > 3 then r:line() end
+  local n = (nums() or {})[1]
+  if not n then return nil, 'no pedestrian count' end
+  for i = 1, n do
+    local ref, k, initial = (nums() or {})[1], (nums() or {})[1], (nums() or {})[1]
+    if not ref or not k or not initial then return nil, ('pedestrian %d of %d unreadable'):format(i, n) end
+    local ped = {ref = math.floor(ref), initial = math.floor(initial), points = {}, reverse = false}
+    for _ = 1, k do
+      local l = r:line()
+      local kind = l and (c1text.firstToken(l) or ''):lower()
+      local lines = kind and INSTRUCTION_LINES[kind]
+      if not lines then return nil, ('pedestrian %d of %d: unknown instruction "%s"'):format(i, n, tostring(l)) end
+      if kind == 'reverse' then ped.reverse = true end
+      for _ = 1, lines do
+        local p = nums()
+        if (kind == 'point' or kind == 'xpoint') and p and p[3] then
+          -- y >= 500: the ped follows the ground there, which is 1000 lower (pedestrn.c casts from y - 999.6)
+          ped.points[#ped.points + 1] = {p[1], p[2] >= 500 and p[2] - 1000 or p[2], p[3]}
+        end
+      end
+    end
+    if ped.ref < 100 and #ped.points > 0 then out.peds[#out.peds + 1] = ped end
+  end
+  return out
 end
 
 -- C1's environments, by their race files' names (RACES.TXT gives each race's location): Bleak City (CITY*),
@@ -228,6 +309,7 @@ M.VERSIONS = {
 -- then so a coroutine can spread the work over frames. Returns data or nil, error.
 -- opts.robots: the German version's robot peds (BORING.TXT, its G* gibs) where the data has them.
 -- opts.version: a key of M.VERSIONS; that version's folder's files are used before the original's.
+-- opts.race: a race file (e.g. 'CITYA1.TXT') whose checkpoints and ped routes to read (out.raceLayout).
 M.HUD_FONTS = {'NEWBIGGR', 'NEWHITE', 'MEDIUMHD', 'BLUEHEAD'}
 
 function M.load(root, io, yield, opts)
@@ -275,6 +357,7 @@ function M.load(root, io, yield, opts)
   out.recoveryCost = M.recoveryCost(general, out.method)
   out.repairCost = M.repairCost(general, out.method)
   out.pedTime = M.pedTimeValue(general, out.method)
+  out.checkpointCredits = M.checkpointCredits(general, out.method) or M.DEFAULT_CHECKPOINT_CREDITS
   if not out.repairCost then
     out.repairCost = M.DEFAULT_REPAIR_COST
     warn(('no "Repair cost for each skill level" line in GENERAL.TXT: repairs cost %d a %%%% of damage'):format(out.repairCost))
@@ -443,6 +526,13 @@ function M.load(root, io, yield, opts)
     out.groups = M.raceGroups(out.races)
   else
     out.notes[#out.notes + 1] = 'no RACES.TXT: only "all pedestrians" to choose from'
+  end
+  -- a track converted from a C1 race: its race file's checkpoints and ped routes
+  if opts.race then
+    local text = io.read(data .. '/RACES/' .. opts.race)
+    local layout, why = nil, 'no RACES/' .. opts.race
+    if text then layout, why = M.parseRaceLayout(text, out.method) end
+    if layout then out.raceLayout = layout else warn(('race %s: not read: %s'):format(opts.race, why)) end
   end
   -- C1's HUD fonts (the 640 x 480 ones): NEWBIGGR and NEWHITE for the credits and kills, MEDIUMHD for the
   -- credits a kill earns, BLUEHEAD for its time (dethrace init.c, displays.c EarnCredits2 / AwardTime)

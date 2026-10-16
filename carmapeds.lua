@@ -54,6 +54,24 @@ local function countKeys(t) local n = 0 for _ in pairs(t) do n = n + 1 end retur
 -- ---------------------------------------------------------------------------------------------
 -- Loading
 local FONT_UPSCALE = 3
+
+-- A track converted from a Carmageddon 1 race says which race in its data/carmageddon.ini (RACE = its race
+-- file, SCALE = metres per C1 world unit): its peds are then the race file's, on their C1 routes, and its
+-- checkpoints work as in C1. {file, scale} or nil.
+local c1race
+local function readTrackRace()
+  if not (ac.getFolder and ac.FolderID and ac.FolderID.ContentTracks) then return nil end  -- not AC (BeamNG)
+  local path = ac.getFolder(ac.FolderID.ContentTracks) .. '/' .. ac.getTrackFullID('/') .. '/data/carmageddon.ini'
+  if not io.fileExists(path) then return nil end
+  local f = io.open(path, 'rb')
+  if not f then return nil end
+  local text = f:read('*a') or ''
+  f:close()
+  local file = text:match('RACE%s*=%s*([%w_%-%.]+)')
+  if not file then return nil end
+  return {file = file, scale = tonumber(text:match('SCALE%s*=%s*([%d%.]+)')) or 6.9}
+end
+
 local function startLoading()
   data, loadError, textures, fontTextures, peds = nil, nil, {}, {}, {}
   loader = coroutine.create(function()
@@ -80,7 +98,10 @@ local function startLoading()
       io_.lastError = why
       return nil
     end
-    local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots, version = settings.dataVersion})
+    c1race = readTrackRace()
+    if c1race then log(('C1 track: race %s, %g m per unit'):format(c1race.file, c1race.scale)) end
+    local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots, version = settings.dataVersion,
+      race = c1race and c1race.file})
     if not d then
       if not io.fileExists(__dirname .. '/DATA/PEDESTRN.TXT') and not io.fileExists(__dirname .. '/DATA/BORING.TXT') then
         err = 'Copy the DATA folder from your Carmageddon 1 install into this app\'s folder ('
@@ -559,6 +580,63 @@ local function pedGroup(key)
   return nil
 end
 
+-- A C1 ped's route as a path (paths.lua's format: samples every paths.STEP along it, on the ground): its race
+-- file points, in metres, joined by straight lines as C1 walks them. Also returns where each point is along it.
+local function racePath(points, scale)
+  local px, py, pz, at = {}, {}, {}, {0}
+  for i, p in ipairs(points) do
+    px[i], py[i], pz[i] = p[1] * scale, p[2] * scale, p[3] * scale
+    if i > 1 then at[i] = at[i - 1] + math.sqrt((px[i] - px[i - 1]) ^ 2 + (pz[i] - pz[i - 1]) ^ 2) end
+  end
+  local length = at[#at]
+  local path = {x = {}, y = {}, z = {}, s = {}}
+  local seg = 1
+  local function add(s)
+    while seg < #points - 1 and at[seg + 1] < s do seg = seg + 1 end
+    local x, y, z = px[seg], py[seg], pz[seg]
+    if #points > 1 then
+      local len = at[seg + 1] - at[seg]
+      local t = len > 0 and math.min(1, (s - at[seg]) / len) or 0
+      x, y, z = x + (px[seg + 1] - x) * t, y + (py[seg + 1] - y) * t, z + (pz[seg + 1] - z) * t
+    end
+    local n = #path.x + 1
+    -- C1 finds the ground under a route straight down however far it is (FindYVerticallyBelow2)
+    path.x[n], path.y[n], path.z[n], path.s[n] = x, groundAt(x, y, z) or pedlogic.groundBelow(ray, x, y + 1.5, z, 200) or y, z, s
+  end
+  local s = 0
+  while s < length do add(s) s = s + paths.STEP end
+  add(length)
+  if #path.x > 1 and path.s[#path.x] - path.s[#path.x - 1] < 1e-3 then  -- the end fell on a sample
+    for _, k in ipairs({'x', 'y', 'z', 's'}) do table.remove(path[k]) end
+  end
+  path.n, path.length = #path.x, path.s[#path.x]
+  return path, at
+end
+
+-- A converted C1 track: every ped of its race file, of its type, starting at its starting point and walking
+-- its route back and forth. Ids 1.. in race file order, the same on every client.
+local function racePeds(list, byId)
+  local defs = {}
+  for _, def in ipairs(data.peds) do defs[def.ref] = def end
+  local missing = {}
+  for id, rp in ipairs(data.raceLayout.peds) do
+    local def = defs[rp.ref]
+    if def then
+      local path, at = racePath(rp.points, c1race.scale)
+      local ped = pedlogic.new(def, id, path, pedSeed(id), 0)
+      local s0 = at[math.max(1, math.min(#at, rp.initial))]
+      ped.s, ped.initialS, ped.pathDir, ped.initialDir = s0, s0, 1, 1
+      ped.anchor = {t0 = 0, s0 = s0, dir0 = 1}
+      pedlogic.placeOnPath(ped)
+      list[#list + 1], byId[id] = ped, ped
+    else
+      missing[rp.ref] = true
+    end
+    if id % 10 == 0 then coroutine.yield() end
+  end
+  for ref in pairs(missing) do log(('race %s: no ped type %d in the data, its peds left out'):format(c1race.file, ref)) end
+end
+
 -- Builds all peds (a coroutine: path generation raycasts are spread over frames). pedCount includes the flagman
 -- and the grid girls, who are the last to go when it is turned down (9: only them; 0: no peds at all).
 local function populateTask(pedCount, groupKey)
@@ -586,6 +664,10 @@ local function populateTask(pedCount, groupKey)
     for _, g in ipairs(spawnGridGirls(gridGirlType, GRID_GIRL_IDS, left)) do
       list[#list + 1], byId[g.id], left = g, g, left - 1
     end
+  end
+  if data.raceLayout and c1race then
+    if pedCount > 0 then racePeds(list, byId) end  -- all of them, unless peds are off
+    return list, byId
   end
   for id = 1, left do
     local def = randomTypes[1 + math.floor(spawnRandom() * #randomTypes)]
@@ -909,6 +991,75 @@ local function chargeRepairs(c)
   end
 end
 
+-- Checkpoints on a converted C1 track (structur.c CheckCheckpoints, IncrementCheckpoint, WrongCheckpoint): each
+-- car passes the race file's checkpoints in order, the last one ending a lap. The right one shows CHECKPOINT,
+-- plays its sound and earns GENERAL.TXT's checkpoint credits (middle skill level); the final lap starts with C1's
+-- "final lap" voice instead; after the race file's laps the race is completed (its sound, banner and "all laps
+-- raced" bonus, middle skill level) and checkpoints count no more until the session restarts. A wrong one plays
+-- C1's wrong-checkpoint sound (not again for the same one within 20 s, nor for another within 2 s).
+local SOUND_RACE_COMPLETED, SOUND_CHECKPOINT, SOUND_WRONG_CHECKPOINT, SOUND_FINAL_LAP = 8011, 8012, 8013, 8014
+local WRONG_CHECKPOINT = {text = 'WRONG CHECKPOINT!'}
+local checkpointState = {}  -- local car index -> {next, lap, done, x, z, t, lastAt, lastWrong}
+local function crossed(ax, az, bx, bz, cx, cz, dx, dz)
+  local function side(px, pz, qx, qz, rx, rz) return (qx - px) * (rz - pz) - (qz - pz) * (rx - px) end
+  local d1, d2 = side(cx, cz, dx, dz, ax, az), side(cx, cz, dx, dz, bx, bz)
+  local d3, d4 = side(ax, az, bx, bz, cx, cz), side(ax, az, bx, bz, dx, dz)
+  return ((d1 > 0) ~= (d2 > 0)) and ((d3 > 0) ~= (d4 > 0))
+end
+local function checkpointSound(c, id)
+  if c.index == sim.focusedCar then playSoundAt(id, sim.cameraPosition.x, sim.cameraPosition.y, sim.cameraPosition.z, true) end
+end
+local function updateCheckpoints(c)
+  local layout = data.raceLayout
+  if not layout or not c1race or #layout.checkpoints == 0 then return end
+  local st = checkpointState[c.index]
+  if not st or clockT < st.t then  -- new or restarted session
+    st = {next = 1, lap = 1, done = false, lastAt = -1e9}
+    checkpointState[c.index] = st
+  end
+  local px, pz = st.x, st.z
+  st.x, st.z, st.t = c.x, c.z, clockT
+  if not px or st.done or clockT <= 0 or c.teleported or (c.x - px) ^ 2 + (c.z - pz) ^ 2 > 2500 then return end
+  local k = c1race.scale
+  for i, cp in ipairs(layout.checkpoints) do
+    for _, q in ipairs(cp.quads) do
+      if crossed(px, pz, c.x, c.z, q[1][1] * k, q[1][3] * k, q[4][1] * k, q[4][3] * k) then
+        if i == st.next then
+          local voice = false
+          st.lastAt = clockT
+          if st.next >= #layout.checkpoints then
+            st.next, st.lap = 1, st.lap + 1
+            if st.lap > layout.laps then
+              st.done = true
+              checkpointSound(c, SOUND_RACE_COMPLETED)
+              if c.decides then scoreEvent(c, (layout.lapsBonus or {})[2] or 0, scoring.BANNER.raceCompleted) end
+              return
+            elseif st.lap == layout.laps then
+              checkpointSound(c, SOUND_FINAL_LAP)
+              voice = true
+            end
+          else
+            st.next = st.next + 1
+          end
+          if not voice then checkpointSound(c, SOUND_CHECKPOINT) end
+          if c.decides then scoreEvent(c, data.checkpointCredits or c1data.DEFAULT_CHECKPOINT_CREDITS, scoring.BANNER.checkpoint) end
+        else
+          -- backing over the one just passed isn't wrong
+          local prev = st.next - 1
+          if prev == 0 then prev = st.lap > 1 and #layout.checkpoints or -1 end
+          local since = clockT - st.lastAt
+          if i ~= prev and ((i == st.lastWrong and since > 20000) or (i ~= st.lastWrong and since > 2000)) then
+            st.lastAt, st.lastWrong = clockT, i
+            checkpointSound(c, SOUND_WRONG_CHECKPOINT)
+            if c.index == sim.focusedCar then scoring.queueBanner(bannerQueue, WRONG_CHECKPOINT) end
+          end
+        end
+        return
+      end
+    end
+  end
+end
+
 local RICOCHET_MS, NICE_SHOT_SLIP, NICE_SHOT_YAW = 2000, 20, 1.5  -- ms; degrees; rad/s
 local MAX_CLOCK = 1e9  -- ms (11 days): session clocks beyond this aren't real
 local wasReplaying = false
@@ -1172,7 +1323,7 @@ end
 -- Maps without an AI line: explore their drivable ground first (once), then place the peds.
 local exploring
 local function startExploring()
-  if splineAvailable() or explored then startPopulating() return end
+  if splineAvailable() or explored or (data.raceLayout and c1race) then startPopulating() return end
   exploring = coroutine.create(exploreTask)
 end
 
@@ -1336,6 +1487,7 @@ function script.update(dt)
         chargeResets(c)
         chargeRepairs(c)
       end
+      updateCheckpoints(c)
     end
   end
   jumped = {}  -- resets of cars decided elsewhere (or while replaying) aren't charged here

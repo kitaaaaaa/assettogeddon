@@ -1,0 +1,50 @@
+# C1 track converter
+
+Turns a Carmageddon 1 race's track into an Assetto Corsa track folder, made from your own copy of the game's
+`DATA` folder. The converted track contains the game's models and textures, so it's for your own install:
+don't share it.
+
+```
+python c1_to_ac.py <Carmageddon DATA folder> CITYA1.TXT <output folder> c1_maim_street "Maim Street (Carmageddon)"
+```
+
+Then copy `<output folder>\c1_maim_street` to `assettocorsa\content\tracks\`. Needs Python 3 with NumPy and
+Pillow. Only race 1 (`CITYA1.TXT`, Maim Street in Bleak City) has been converted and checked so far.
+
+## What it makes
+
+- **`c1_maim_street.kn5`**: the race's track model (the normal-detail one), the knock-over objects placed on it
+  (lamp posts, trees, traffic lights, phone boxes, parked wrecks...) and the textures. Positions are C1's times
+  6.9 (one C1 world unit is 6.9 m). Both games are right-handed with Y up and draw the same side of a triangle,
+  so nothing is mirrored or flipped. Textures are blown up 4x with hard pixels to keep C1's look, and palette
+  colour 0 is see-through (alpha tested).
+- **Surfaces**: the track's faces are drivable. A C1 material whose name starts with `0` is grass (C1's mud
+  modifier: 0.7x grip, bumpy), `1` astroturf (0.85x); everything else is road. Faces steeper than 60 degrees are
+  walls. Water (`!` materials) and the knock-over objects don't collide.
+- **Checkpoints as sectors**: each C1 checkpoint is an AC timing line (`AC_TIME_n_L`/`_R`) across the road where
+  the checkpoint's gate is. C1 counts a lap at its last checkpoint, so that one is AC's finish line
+  (`AC_TIME_0`), and checkpoints 1 to 7 are the sector splits.
+- **Grid**: 16 places (`AC_START_n`, also used as `AC_PIT_n`) two by two behind C1's grid position, facing its
+  direction. `AC_HOTLAP_START_0` is 55 m before the finish line.
+- **`data/carmageddon.ini`**: which race the track came from. Carmapeds reads it and then uses that race's
+  peds and checkpoints (see the app's README).
+- `map.png`, `data/map.ini`: a map of the roads. `ui/preview.png`: the view from pole position.
+
+## Not done yet
+
+- No AI line (`ai/fast_lane.ai`): AI cars can't drive it, and AC's own lap and sector times are untested
+  without one.
+- The knock-over objects are scenery: cars drive through them.
+- C1's animated textures (the scrolling checkpoint banners, the video walls) are still.
+- The C1 grid starts just past the finish line, so in an AC race the first lap begins at once.
+
+## Files
+
+| File | |
+| --- | --- |
+| `c1_to_ac.py` | The converter |
+| `c1track.py` | Reads a race: its race file, track actors and models, noncars, materials, pixelmaps |
+| `brender.py` | Readers for C1's BRender files (from carmadroid-recomp's `tools/pc2android`) |
+| `textures.py` | C1 materials to RGBA images |
+| `kn5w.py` | KN5 (version 5) and DDS writer |
+| `kn5view.py` | Renders a converted track from one of its dummies, for checking without AC |

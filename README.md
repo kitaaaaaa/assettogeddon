@@ -101,6 +101,14 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
 - **Resets cost credits**, as in C1, where recovering the car also repairs it: going back to the pits, or CSP's
   reset to the road or in place, costs GENERAL.TXT's recovery cost for the hardest skill level (4000 in the
   original data), shown as "LOST 4000 CREDITS". Not before the start, nor in a session's first 3 s.
+- **Carmageddon's own tracks**: a track converted from a C1 race with [tools/c1track](tools/c1track/README.md)
+  (so far race 1, Maim Street) tells the app which race it is. The peds are then exactly the race's: each of
+  its 527 at the place C1 starts it, of its C1 type, walking its C1 route back and forth (the race file's
+  power-ups aren't in yet), instead of random ones, whatever the peds per km setting (unless peds are off). Its checkpoints work as in
+  C1 for every car: the right one shows CHECKPOINT, plays its sound and earns GENERAL.TXT's checkpoint credits
+  (500 at the middle skill level); the last lap starts with C1's "final lap" voice; after the race's laps (2 for
+  Maim Street) comes RACE COMPLETED with its sound and the race's "all laps raced" bonus (10000), and the
+  checkpoints stop counting until the session restarts. A wrong checkpoint plays C1's wrong-checkpoint sound.
 
 ## Approximations
 
@@ -157,6 +165,7 @@ luajit tests/explore_test.lua
 luajit tests/make_fake_c1.lua /tmp/fakec1 && luajit tests/smoke_test.lua /tmp/fakec1
 luajit tests/nospline_test.lua /tmp/fakec1
 sh tests/run_sync.sh /tmp/fakec1
+luajit tests/c1track_test.lua /tmp/fakec1
 ```
 
 `smoke_test.lua` runs the whole app against a mock of the CSP API (`tests/csp_mock.lua`) with synthetic data
