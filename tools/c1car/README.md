@@ -59,8 +59,6 @@ all in the converter; keep them when converting other cars.
 | `flames.ini [HEADER]` with `INTENSITY` (no flames needed), `lights.ini [HEADER] VERSION=3` | `KEY_NOT_FOUND [HEADER] INTENSITY` |
 | `damage.ini [SCRATCHES] [OSCILLATIONS]`, `fuel_cons.ini`, `sounds.ini [ENGINE]` | Present in a working car |
 
-The driver is only there for AC and CSP: C1's eyes (where the cockpit camera goes) are well forward of where a driver's body fits, so `extension/ext_config.ini` hides all of the driver's model (`[MODEL_REPLACEMENT_0] FILE=<driver>.kn5 HIDE=?`).
-
 CSP's log still says "No tyre meshes found" for the wheels (it doesn't find them by node name; a working car's
 tyres use the `ksTyres` shader). That is only a warning: the car loads and drives without it.
 

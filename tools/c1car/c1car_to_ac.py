@@ -352,12 +352,6 @@ def add_driver(root, donor, eyes):
             shutil.copy(os.path.join(donor, 'animations', k.group(2).strip()), os.path.join(root, 'animations'))
         out.append(line)
     open(os.path.join(root, 'data', 'driver3d.ini'), 'w', newline='\r\n').write('\n'.join(out) + '\n')
-    # the driver is only there for AC and CSP: C1's eyes are well forward of where a driver's body fits, so CSP
-    # hides all of the driver's model (the cockpit camera stays at C1's)
-    model = next((l.split('=', 1)[1].strip() for l in out if re.match(r'\s*NAME\s*=', l)), 'driver')
-    os.makedirs(os.path.join(root, 'extension'), exist_ok=True)
-    open(os.path.join(root, 'extension', 'ext_config.ini'), 'w', newline='\r\n').write(
-        '[MODEL_REPLACEMENT_0]\nFILE=%s.kn5\nHIDE=?\n' % model)
     shutil.copy(os.path.join(donor, 'driver_base_pos.knh'), root)
 
 
