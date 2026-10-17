@@ -66,6 +66,33 @@ def open_points(race, ground):
     return np.array(out)
 
 
+def route_segments(race, ground):
+    """C1's opponent road network and ped routes as short segments where cars and peds go (C1 units): what the
+    solids must leave clear."""
+    def grounded(q):
+        y, _ = ground.below(q[0], q[2], q[1] + 8 / U)
+        return np.array([q[0], y if y is not None and q[1] - y < 12 / U else q[1], q[2]])
+    segs = []
+    def along(a, b, heights, raw=False):
+        # two samplings about a metre apart: on a slope the path between samples sits differently on each
+        m = int(np.linalg.norm(b - a) * U)
+        for n in {max(2, m), max(2, m + 1)}:
+            pts = [a + (b - a) * s for s in np.linspace(0, 1, n)]
+            base = pts if raw else [grounded(q) for q in pts]
+            for h in heights:
+                segs.extend((p + [0, h / U, 0], q + [0, h / U, 0]) for p, q in zip(base, base[1:]))
+    N = [np.array(n, float) for n in race['path_nodes']]
+    for sec in race['path_sections']:
+        along(N[sec['a']], N[sec['b']], (0.3, 0.6, 1.2, 1.6))
+    for ped in race['peds']:
+        if ped['ref'] >= 100: continue
+        pts = [np.array([v[0], v[1] - 1000 if v[1] >= 500 else v[1], v[2]]) for k, v in ped['instructions'] if k == 'point']
+        for a, b in zip(pts, pts[1:]):
+            along(a, b, (0.5,), raw=True)
+            along(a, b, (0.3, 1.6))
+    return segs
+
+
 def add_solids(k, faces):
     """The solid fill and wall slabs (solids.py) as collision meshes: ordinary drawn meshes with a fully
     see-through texture (AC collides with them as with any wall), named 1WALL_SOLID_...."""
@@ -159,7 +186,8 @@ def main(data, race_name, out, folder, ui_name):
     race = t.race
     specs = c1track.noncar_specs(data)
     movable = {}   # model name -> (object kind, mass in kg)
-    for name in set(m for m in os.listdir(os.path.join(data, 'MODELS')) if m.startswith('&')):
+    # the track's own noncar models: some sit in shared model files, not under their own name in DATA/MODELS
+    for name in (m for m in t.models if m.startswith('&')):
         num = name[1:3]
         if num.isdigit() and int(num) in specs and specs[int(num)]['file'] in MOVABLE:
             movable[name.upper()] = (specs[int(num)]['file'][:-4], specs[int(num)]['mass'] * 1000)
@@ -219,9 +247,10 @@ def main(data, race_name, out, folder, ui_name):
                     idx.append(len(verts))
                     verts.append((p[0] * U, p[1] * U, p[2] * U, n[0], n[1], n[2], uv[0], uv[1], 1.0, 0.0, 0.0))
             # lower case: AC finds a surface key anywhere in a mesh name (MWALLIT would read as WALL too)
-            base = mat.replace('.MAT', '').replace('!', 'X').replace('&', 'N').lower()
-            prefix = '1%s_' % s if s else 'V_'     # drawn only: never a leading digit (AC reads that as a surface)
-            name = '%s%s_%d_%d' % (prefix, base, cx, cz)
+            # no material names in mesh names: AC looks for its surface keys anywhere in a name, and C1's
+            # material names hold words like WALL and ROAD. Drawn-only meshes never start with a digit.
+            prefix = '1%s_' % s if s else 'V_'
+            name = '%s%d_%d' % (prefix, cx, cz)
             counts[name] = counts.get(name, 0) + 1
             if counts[name] > 1: name += '_%d' % counts[name]
             k.meshes.append((name, verts, idx, mat_index[mat], True))
@@ -230,12 +259,11 @@ def main(data, race_name, out, folder, ui_name):
     opened = open_points(race, ground)
     fill, pieces = solids.roof_fill(up_faces, [w[0] for w in walls], scene_tris, opened)
     slabs = solids.wall_slabs(walls, opened)
-    add_solids(k, fill + slabs)
+    wall_slabs = solids.clear_routes(fill + slabs, route_segments(race, ground))
     print('solid: %d filled pieces under %d upward faces, %d wall slabs' % (pieces, len(up_faces), len(walls)))
     dynamic = add_movable_objects(k, t, movable, material)
     colliders = solids.noncar_colliders(t, U, skip=movable)
     lamps = solids.lamp_lights(t, U)
-    wall_slabs = fill + slabs
 
     # checkpoints -> AC timing gates. C1 counts a lap at its last checkpoint, so that one is AC's
     # finish line (AC_TIME_0) and checkpoints 1..n-1 are the sector splits AC_TIME_1..n-1.
@@ -287,11 +315,14 @@ def main(data, race_name, out, folder, ui_name):
     base = os.path.splitext(os.path.basename(c1track.find(data + '/RACES', race_name)))[0].upper()
     k.dummies.append(('C1RACE_' + base, dummy((0, 0, 0), (0, 0, 1))))
 
-    k.write(os.path.join(root, folder + '.kn5'), root=folder.upper())
-
-    # the AI line, along C1's opponent road network through the checkpoints
+    # the AI line, along C1's opponent road network through the checkpoints; the solids are cleared off it too
     os.makedirs(os.path.join(root, 'ai'), exist_ok=True)
     P, length, extra = ailine.build(race, gates, ground, geom.TriIndex(solid_tris + wall_slabs), U)
+    Pc = np.asarray(P, float) / U
+    wall_slabs = solids.clear_routes(wall_slabs, [(Pc[i] + [0, h / U, 0], Pc[(i + 1) % len(Pc)] + [0, h / U, 0])
+                                                 for i in range(len(Pc)) for h in (0.5, 1.2)])
+    add_solids(k, wall_slabs)
+    k.write(os.path.join(root, folder + '.kn5'), root=folder.upper())
     ailine.write(os.path.join(root, 'ai', 'fast_lane.ai'), P, extra)
     print('AI line: %d points, %.2f km' % (len(P), length[-1] / 1000))
 

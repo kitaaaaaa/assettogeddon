@@ -13,6 +13,7 @@ building is filled:
 """
 import math
 import numpy as np
+import geom
 
 DOWN = np.array([0.0, -1.0, 0.0])
 WALL_DEPTH = 3.0 / 6.9     # C1 units
@@ -280,3 +281,43 @@ def lamp_lights(track, scale, lamp_material='LAMPTOP.MAT'):
         T = np.array(M[3], float)
         out.append((c[0] * X + c[1] * Y + c[2] * Z + T) * scale)
     return out
+
+
+def clear_routes(faces, segments, rounds=30):
+    """Drops the solid faces (triangles, both windings) any route segment (a, b) runs into, until every
+    segment is clear: what the open-point carving leaves in C1's way, it takes out exactly."""
+    faces = [np.asarray(F, float) for F in faces]
+    dropped = 0
+    for _ in range(rounds):
+        if not faces: break
+        index = geom.TriIndex(faces)
+        drop = set()
+        for a, b in segments:
+            L = np.linalg.norm(b - a)
+            if L < 1e-9: continue
+            d = (b - a) / L
+            h = index.ray(a, d, L)
+            if h is None: continue
+            p = a + d * h
+            ids = index._cells(p[0] - 1e-3, p[2] - 1e-3, p[0] + 1e-3, p[2] + 1e-3)
+            if ids is None: continue
+            T = index.t[ids]
+            n = index.n[ids]
+            near = np.abs(((p - T[:, 0]) * n).sum(1)) < 1e-4
+            # barycentric: p on the triangle
+            v0, v1, v2 = index.e1[ids], index.e2[ids], p - T[:, 0]
+            d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
+            d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
+            den = d00 * d11 - d01 * d01
+            ok = np.abs(den) > 1e-18
+            v = np.where(ok, (d11 * d20 - d01 * d21) / np.where(ok, den, 1), -1)
+            w = np.where(ok, (d00 * d21 - d01 * d20) / np.where(ok, den, 1), -1)
+            on = near & (v >= -1e-4) & (w >= -1e-4) & (v + w <= 1 + 1e-4)
+            drop.update(ids[on].tolist())
+        if not drop: break
+        keys = {tuple(sorted(map(tuple, np.round(index.t[i], 5)))) for i in drop}
+        before = len(faces)
+        faces = [F for F in faces if tuple(sorted(map(tuple, np.round(F, 5)))) not in keys]
+        dropped += before - len(faces)
+    print('  route clearing: %d solid faces taken out of C1\'s roads, ped routes and the AI line' % dropped)
+    return faces
