@@ -44,21 +44,25 @@ def ground_y(index, x, z, ymax):
 def open_points(race, ground):
     """Where C1 itself drives and walks: its opponents' road network and every ped route, sampled every
     metre on the ground, 0.3 m and 1.6 m up (C1 units). The solids never fill these."""
-    lines = []
+    lines = []   # (from, to, half width in metres)
     N = [np.array(n, float) for n in race['path_nodes']]
     for sec in race['path_sections']:
-        lines.append((N[sec['a']], N[sec['b']]))
+        lines.append((N[sec['a']], N[sec['b']], 5.0))      # the road, wide enough for the AI line's rounded corners
     for ped in race['peds']:
         if ped['ref'] >= 100: continue
         pts = [np.array([v[0], v[1] - 1000 if v[1] >= 500 else v[1], v[2]]) for k, v in ped['instructions'] if k == 'point']
-        lines += list(zip(pts, pts[1:])) or [(pts[0], pts[0])]
+        lines += [(a, b, 0.5) for a, b in zip(pts, pts[1:])] or [(pts[0], pts[0], 0.5)]
     out = []
-    for a, b in lines:
-        for s in np.linspace(0, 1, max(2, int(np.linalg.norm(b - a) * U) + 1)):
-            q = a + (b - a) * s
-            y, _ = ground.below(q[0], q[2], q[1] + 8 / U)
-            y = y if y is not None and q[1] - y < 12 / U else q[1]
-            out += [[q[0], y + 0.3 / U, q[2]], [q[0], y + 1.6 / U, q[2]]]
+    for a, b, half in lines:
+        d = b - a
+        side = np.array([-d[2], 0.0, d[0]])
+        side = side / np.linalg.norm(side) if np.linalg.norm(side) > 1e-9 else np.array([1.0, 0, 0])
+        for s in np.linspace(0, 1, max(2, int(np.linalg.norm(d) * U) + 1)):
+            for o in np.arange(-half, half + 1e-6, 1.0 if half >= 1 else half):
+                q = a + d * s + side * (o / U)
+                y, _ = ground.below(q[0], q[2], q[1] + 8 / U)
+                y = y if y is not None and q[1] - y < 12 / U else q[1]
+                out += [[q[0], y + 0.3 / U, q[2]], [q[0], y + 1.6 / U, q[2]]]
     return np.array(out)
 
 

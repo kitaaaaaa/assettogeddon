@@ -181,11 +181,15 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
         ('FUEL', [('CONSUMPTION', 0.004), ('FUEL', 60), ('MAX_FUEL', 60)]),
         ('FUELTANK', [('POSITION', f3((0, -0.2, -1.5)))]),
         ('RIDE', [('PICKUP_FRONT_HEIGHT', '%.3f' % -cgy), ('PICKUP_REAR_HEIGHT', '%.3f' % -cgy)]),
+        ('RULES', [('MIN_HEIGHT', 0.0)]),
+        # read when the pit stop and crew load (C1 has no pit stops: AC's usual times)
+        ('PIT_STOP', [('TYRE_CHANGE_TIME_SEC', 10), ('FUEL_LITER_TIME_SEC', 0.5), ('BODY_REPAIR_TIME_SEC', 10),
+                      ('ENGINE_REPAIR_TIME_SEC', 2), ('SUSP_REPAIR_TIME_SEC', 30)]),
     ]))
     def axle(front):
         a, b = (lf, rf) if front else (lr, rr)
         return [('TYPE', 'DWB'), ('BASEY', '%.4f' % (a[1] - cgy)), ('TRACK', '%.4f' % (a[0] - b[0])),
-                ('ROD_LENGTH', '%.4f' % p['sag']), ('HUB_MASS', 50),
+                ('ROD_LENGTH', '%.4f' % p['sag']), ('HUB_MASS', 50), ('RIM_OFFSET', 0),
                 ('WBCAR_TOP_FRONT', '0.40,0.17,0.15'), ('WBCAR_TOP_REAR', '0.40,0.17,-0.15'),
                 ('WBCAR_BOTTOM_FRONT', '0.48,-0.17,0.15'), ('WBCAR_BOTTOM_REAR', '0.48,-0.17,-0.15'),
                 ('WBTYRE_TOP', '0.17,0.15,0'), ('WBTYRE_BOTTOM', '0.14,-0.18,0'),
@@ -199,6 +203,7 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
                 ('DAMP_FAST_REBOUNDTHRESHOLD', 0.1)]
     W('suspensions.ini', ini([
         ('HEADER', [('VERSION', 1.5)]),
+        ('_EXTENSION', [('TORQUE_MODE_EX', 2)]),         # CSP: drive and brake torque react through the hubs
         ('BASIC', [('WHEELBASE', '%.4f' % (lf[2] - lr[2])), ('CG_LOCATION', '%.4f' % p['cg_front'])]),
         ('ARB', [('FRONT', 0), ('REAR', 0)]),
         ('FRONT', axle(True)), ('REAR', axle(False)),
@@ -209,7 +214,7 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
     def tyre(front):
         mu = p['mu_front'] if front else p['mu_rear']
         rr0 = p['rolling_force'][0 if front else 1]
-        return [('NAME', 'Carmageddon'), ('SHORT_NAME', 'C1'), ('WIDTH', '%.3f' % wheel_width),
+        return [('NAME', 'Carmageddon'), ('SHORT_NAME', 'C1'), ('TYPE_HINT', 'TREADED'), ('WIDTH', '%.3f' % wheel_width),
                 ('RADIUS', '%.4f' % wheel_radius), ('RIM_RADIUS', '%.4f' % (wheel_radius * 0.62)),
                 ('ANGULAR_INERTIA', 2.0), ('DAMP', 500), ('RATE', 380000),
                 ('DY0', '%.4f' % mu), ('DY1', -0.04), ('DX0', '%.4f' % (mu * min(p['traction'], 1.15))), ('DX1', -0.04),
@@ -224,6 +229,9 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
                ('BLISTER_GAMMA', 1.5), ('BLISTER_GAIN', 0)]
     W('tyres.ini', ini([
         ('HEADER', [('VERSION', 4)]), ('COMPOUND_DEFAULT', [('INDEX', 0)]),
+        # CSP: the contact patch from several rays across the tread, not one under the hub (kerbs, debris)
+        ('_EXTENSION', [('ENABLE', 1), ('EXTENDED_RAYTRACING', 1), ('LATERAL_RAYS', 3), ('LONGITUDINAL_RAYS', 5),
+                        ('MAX_RAY_ANGLE', 60), ('MAX_RAY_WIDTH_RATIO', 1.3), ('DISABLE_RAY_DOUBLING', 0)]),
         ('FRONT', tyre(True)), ('REAR', tyre(False)),
         ('THERMAL_FRONT', thermal), ('THERMAL_REAR', thermal),
     ]))
@@ -253,7 +261,7 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
                      ('VALID_SHIFT_RPM_WINDOW', 1000), ('CONTROLS_WINDOW_GAIN', 0.4), ('INERTIA', 0.03)]),
         ('CLUTCH', [('MAX_TORQUE', '%d' % (tq * 1.6))]),
         ('AUTOCLUTCH', [('UPSHIFT_PROFILE', 'NONE'), ('DOWNSHIFT_PROFILE', 'DOWNSHIFT_PROFILE'), ('USE_ON_CHANGES', 0),
-                        ('MIN_RPM', 1100), ('MAX_RPM', 1700)]),
+                        ('MIN_RPM', 1100), ('MAX_RPM', 1700), ('FORCED_ON', 0)]),
         ('UPSHIFT_PROFILE', [('POINT_0', 30), ('POINT_1', 80), ('POINT_2', 100)]),
         ('DOWNSHIFT_PROFILE', [('POINT_0', 10), ('POINT_1', 250), ('POINT_2', 300)]),
         ('AUTOBLIP', [('ELECTRONIC', 0), ('POINT_0', 10), ('POINT_1', 120), ('POINT_2', 180), ('LEVEL', 0.7)]),
@@ -279,7 +287,8 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
     cl = p['cl_area'] / 2.0
     W('body_cl.lut', '-90|%.3f\n0|%.3f\n90|%.3f\n' % (cl, cl, cl))
     W('body_cd.lut', '-90|0.35\n0|0.35\n90|0.35\n')
-    W('colliders.ini', ini([('COLLIDER_0', [('CENTRE', f3(collider[0])), ('SIZE', f3(collider[1]))])]))
+    W('colliders.ini', ini([('_EXTENSION', [('VERSION', 2)]),
+                            ('COLLIDER_0', [('CENTRE', f3(collider[0])), ('SIZE', f3(collider[1])), ('GROUND_ENABLE', 1)])]))
     W('electronics.ini', ini([
         ('ABS', [('SLIP_RATIO_LIMIT', 0.18), ('CURVE', ''), ('PRESENT', 0), ('ACTIVE', 0), ('RATE_HZ', 200)]),
         ('TRACTION_CONTROL', [('SLIP_RATIO_LIMIT', 0.12), ('CURVE', ''), ('PRESENT', 0), ('ACTIVE', 0),
@@ -287,7 +296,9 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
     ]))
     W('lods.ini', ini([('COCKPIT_HR', [('DISTANCE_SWITCH', 5)]),
                        ('LOD_0', [('FILE', car_id + '.kn5'), ('IN', 0), ('OUT', 1500)])]))
-    W('damage.ini', ini([('DAMAGE', [('INITIAL_LEVEL', 0)])]))
+    W('damage.ini', ini([('SCRATCHES', [('MAX_SPEED', 20), ('MIN_SPEED', 0)]), ('OSCILLATIONS', [('ENABLED', 1)]),
+                         ('DAMAGE', [('INITIAL_LEVEL', 0)])]))
+    W('fuel_cons.ini', ini([('FUEL_EVAL', [('KM_PER_LITER', 4)])]))
     W('ai.ini', ini([
         ('HEADER', [('VERSION', 3)]),
         ('GEARS', [('UP', '%d' % (p['redline'] - 200)), ('DOWN', 3500), ('SLIP_THRESHOLD', 1.1), ('GAS_CUTOFF_TIME', 0.15)]),
@@ -304,14 +315,16 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
         ('BACKFIRE', [('MAXGAS', 0.4), ('MINRPM', 3500), ('MAXRPM', 15000), ('TRIGGERGAS', 0.8), ('VOLUME_IN', 1.0),
                       ('VOLUME_OUT', 0.8), ('VOLUME_SCALE_OUT', 35)]),
         ('BODY_WORK', [('MIN', 0.1), ('GAIN', 1)]),
+        ('ENGINE', [('POSITION', 'front')]),
     ]))
     W('ambient_shadows.ini', ini([('SETTINGS', [('WIDTH', 1.3), ('LENGTH', 3.0)])]))
-    W('lights.ini', '')
-    W('flames.ini', '')
+    W('lights.ini', ini([('HEADER', [('VERSION', 3)])]))
+    W('flames.ini', ini([('HEADER', [('EDIT_MODE', 0), ('INTENSITY', 30), ('EDIT_BIG', 1), ('EDIT_STATE', 2),
+                                     ('BURN_FUEL_MULT', 1), ('FLASH_THRESHOLD', 1)])]))
     W('mirrors.ini', '')
     W('escmode.ini', ini([('SETTINGS', [('POSITION', f3((0, 1.4, 4.2))), ('FOV', 45)])]))
     W('dash_cam.ini', ini([('DASH_CAM', [('POS', f3(eyes)), ('EXP', 36)])]))
-    W('setup.ini', ini([('DISPLAY_METHOD', [('SHOW_CLICKS', 1)])]))
+    W('setup.ini', ini([('DISPLAY_METHOD', [('SHOW_CLICKS', 1)]), ('GEARS', [('USE_GEARSET', 0)])]))
 
 
 def main(data, android, out, car_id, ui_name, car_txt, *skins):
@@ -359,7 +372,11 @@ def main(data, android, out, car_id, ui_name, car_txt, *skins):
         if name.lower().startswith('whl'):
             key = {'whlfl': 'LF', 'whlfr': 'RF', 'whlrl': 'LR', 'whlrr': 'RR'}[name.lower()]
             T = wheels[key]
-            k.objects.append(('WHEEL_' + key, [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [*T, 1]], sub))
+            # as a working car has it: WHEEL_xx -> a tyre node -> its meshes (CSP looks for the tyre under WHEEL_xx)
+            ident = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+            tyre = [('tyre_%s%s' % (key.lower(), '_SUB%d' % i if len(sub) > 1 else ''), *m[1:]) for i, m in enumerate(sub)]
+            k.objects.append(('WHEEL_' + key, [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [*T, 1]],
+                              [('tyre_' + key.lower(), ident, tyre)]))
             # AC and CSP need a suspension node beside each wheel (here empty: C1 cars have no visible suspension)
             k.dummies.append(('SUSP_' + key, [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [*T, 1]]))
         else:
@@ -368,6 +385,10 @@ def main(data, android, out, car_id, ui_name, car_txt, *skins):
             R = S @ M[:3] @ S
             T = M[3] * [-1, 1, 1]
             k.objects.append(('NODE_' + name.upper(), [[*R[0], 0], [*R[1], 0], [*R[2], 0], [*T, 1]], sub))
+    # cockpit nodes AC switches between and turns the steering wheel of (C1 cars have no cockpit: empty)
+    ident = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    k.objects.append(('COCKPIT_HR', ident, [('STEER_HR', ident, [])]))
+    k.objects.append(('COCKPIT_LR', ident, [('STEER_LR', ident, [])]))
     k.write(os.path.join(root, car_id + '.kn5'), root=car_id.upper())
 
     # collider: C1's bounding box (the car's own, world units), as an AC collider and collider.kn5

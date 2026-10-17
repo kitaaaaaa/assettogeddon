@@ -33,7 +33,7 @@ class KN5:
         self.materials = []   # dicts
         self.meshes = []      # (name, verts, indices, material index, casts shadows)
         self.dummies = []     # (name, 4x4 rows)
-        self.objects = []     # (name, 4x4 rows, [(mesh name, verts, indices, material index, casts shadows)])
+        self.objects = []     # (name, 4x4 rows, [mesh (name, verts, indices, material index, casts shadows) or node])
 
     def collider_material(self):
         """A material with a fully transparent, alpha-tested texture: drawn, so AC collides with it, but invisible."""
@@ -68,12 +68,18 @@ class KN5:
         w.f(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
         for name, M in self.dummies:
             w.i(1); w.s(name); w.i(0); w.u8(1); w.f(*[x for r in M for x in r])
-        for name, M, meshes in self.objects:
-            w.i(1); w.s(name); w.i(len(meshes)); w.u8(1); w.f(*[x for r in M for x in r])
-            for mesh in meshes: self._mesh(w, *mesh)
+        for obj in self.objects:
+            self._node(w, *obj)
         for mesh in self.meshes:
             self._mesh(w, *mesh)
         open(path, 'wb').write(w.b)
+
+    def _node(self, w, name, M, children):
+        """A dummy node; each child is a mesh (name, verts, indices, material, shadows) or a node (name, 4x4, children)."""
+        w.i(1); w.s(name); w.i(len(children)); w.u8(1); w.f(*[x for r in M for x in r])
+        for c in children:
+            if len(c) == 3: self._node(w, *c)
+            else: self._mesh(w, *c)
 
     @staticmethod
     def _mesh(w, name, verts, idx, mat, shadows):
