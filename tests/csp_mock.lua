@@ -1,7 +1,7 @@
 -- A mock of the parts of the CSP Lua API the app uses, for running carmapeds.lua offline.
 -- Session clock, wall clock, replay stream and online messages are all under the test's control.
 -- local H = require('tests/csp_mock')(options); H.load(); H.frame()...
---   options: {dataDir, online = bool, mySid = 0, sids = {[index] = sid}, direct = bool, tracksDir, trackIni}
+--   options: {dataDir, online = bool, mySid = 0, sids = {[index] = sid}, direct = bool, tracksDir, trackIni, nodes}
 return function(opts)
   opts = opts or {}
   local H = {logs = {}, shared = {}, cars = {}, outbox = {}, wrapped = {}, quads = 0, decoded = 0, audioCreated = 0, time = 0,
@@ -118,6 +118,10 @@ return function(opts)
       local box = opts.aabbs and opts.aabbs[name]
       if box then
         return {getStaticAABB = function() return vec3(box[1], -10, box[2]), vec3(box[3], 50, box[4]), 1 end}
+      end
+      -- opts.nodes = {[name] = true}: more nodes the track has (at the origin)
+      if opts.nodes and opts.nodes[name] then
+        return {getWorldTransformationRaw = function() return {position = vec3(0, 0, 0), look = vec3(0, 0, 1)} end}
       end
       local i = tonumber(name:match('^AC_START_(%d+)$'))
       local m = i and i < 10 and {position = vec3(i % 2 == 0 and -2 or 2, 0, -1000 - 8 - 4 * i), look = vec3(0, 0, 1)}

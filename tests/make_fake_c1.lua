@@ -106,7 +106,8 @@ mkdir(D .. '/RACES')
 write(D .. '/RACES.TXT', table.concat({
   '// race list', 'Town Race', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'TOWNA1.TXT', '1', '10,20', '0,100', '2', 'Some', 'text',
   'Mine Race', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'MINEA1.TXT', '0',
-  'Mine Again', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'MINEB2.TXT', '0', 'END'}, '\r\n') .. '\r\n')
+  'Mine Again', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'MINEB2.TXT', '0',
+  'Track Race', 'SCENE.FLI,MAP.FLI,INFO.FLI', 'TRACKA1.TXT', '0', 'END'}, '\r\n') .. '\r\n')
 local function raceFile(refs)
   local l = {'VERSION 6', '// lots of track data', '4, 5, 6', 'something.ACT', 'START OF FUNK', 'END OF FUNK',
     'START OF GROOVE', 'some', 'NEXT GROOVE', 'groove', 'END OF GROOVE', '-1', '// pedestrians', tostring(#refs)}

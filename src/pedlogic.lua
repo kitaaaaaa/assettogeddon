@@ -14,6 +14,7 @@ local rng = require('src/rng')
 local M = {}
 
 local U = 6.9                -- metres per C1 world unit
+M.WORLD_SCALE = U
 local GRAVITY = 1.42029e-6   -- C1 world units per ms^2 (= 9.8 m/s^2)
 local MAX_DANGER_DIST2 = 121 -- world units^2
 local FRICTION = 8e-6        -- m/ms^2: a sliding corpse stops from 30 km/h in about a second

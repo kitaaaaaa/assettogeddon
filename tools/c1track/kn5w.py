@@ -31,7 +31,7 @@ class KN5:
     def __init__(self):
         self.textures = []    # (name, bytes)
         self.materials = []   # dicts
-        self.meshes = []      # (name, verts, indices, material index, visible); hidden ones still collide
+        self.meshes = []      # (name, verts, indices, material index, casts shadows)
         self.dummies = []     # (name, 4x4 rows)
 
     def material(self, name, texture, alpha_test=False):
@@ -60,13 +60,13 @@ class KN5:
         w.f(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
         for name, M in self.dummies:
             w.i(1); w.s(name); w.i(0); w.u8(1); w.f(*[x for r in M for x in r])
-        for name, verts, idx, mat, visible in self.meshes:
+        for name, verts, idx, mat, shadows in self.meshes:
             w.i(2); w.s(name); w.i(0); w.u8(1)
-            w.u8(1 if visible else 0); w.u8(1 if visible else 0); w.u8(0)   # casts shadows, visible, transparent
+            w.u8(1 if shadows else 0); w.u8(1); w.u8(0)   # casts shadows, visible, transparent
             w.i(len(verts))
             for v in verts: w.f(*v)          # pos3 normal3 uv2 tangent3
             w.i(len(idx)); w.b += struct.pack('<%dH' % len(idx), *idx)
             w.i(mat); w.i(0); w.f(0.0, 0.0)
             P = np.array([v[:3] for v in verts]); c = (P.min(0) + P.max(0)) / 2
-            w.f(*c, float(np.sqrt(((P - c) ** 2).sum(1)).max())); w.u8(1 if visible else 0)  # renderable
+            w.f(*c, float(np.sqrt(((P - c) ** 2).sum(1)).max())); w.u8(1)  # renderable
         open(path, 'wb').write(w.b)

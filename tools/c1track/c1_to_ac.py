@@ -16,7 +16,8 @@ CELL = 40.0        # C1 units per mesh tile (split for culling)
 TEX_SCALE = 4      # nearest-neighbour upscale, keeps C1's pixel look under AC's filtering
 TEX_MAX = 512
 WALL_NY = 0.5      # faces steeper than this are WALL
-WALL_DEPTH = 2.5 / U  # C1 units: hidden thickness behind one-sided walls (AC tunnels through bare faces)
+WALL_DEPTH = 6.0 / U  # C1 units: solid thickness behind one-sided walls (AC cars tunnel through bare faces)
+WALL_OUT = 0.05 / U   # its front: just in front of the wall's own face
 
 
 def surface_of(mat):
@@ -38,27 +39,51 @@ def ground_y(index, x, z, ymax):
     return index.below(x, z, ymax)[0]
 
 
-def add_wall_thickness(k, walls, solid):
-    """Hidden collision behind each one-sided wall: the face pushed back WALL_DEPTH into a closed slab, cut
-    short where something else is behind it (the other side of a thin wall, a road), so it never sticks out."""
+UP = np.array([0.0, 1.0, 0.0])
+
+
+def add_wall_thickness(k, walls, solid, roof):
+    """A solid slab for each one-sided wall: from just in front of its face back WALL_DEPTH into the building,
+    cut short where something else is behind it (the other side of a thin wall, a road), so it never sticks
+    out of the building. Drawn see-through (a fully transparent, alpha-tested texture) rather than hidden, so
+    AC treats it as the ordinary wall mesh it collides with."""
+    clear = np.zeros((4, 4, 4), np.uint8)
+    k.textures.append(('C1_COLLIDER.dds', kn5w.dds(clear)))
+    mat = k.material('C1_COLLIDER', 'C1_COLLIDER.dds', alpha_test=True)
     buckets = {}
     slabs = []
     for P, n in walls:
         P = np.array(P); c = P.mean(0)
         depth = WALL_DEPTH
-        for o in [c] + [c + (p - c) * 0.8 for p in P]:
+        # what's behind, checked across the whole face (a grid of points over the triangle)
+        N = 6
+        pts = [P[0] * (N - i - j) / N + P[1] * i / N + P[2] * j / N
+               for i in range(N + 1) for j in range(N + 1 - i)]
+        for o in [c] + [c + (p - c) * 0.97 for p in pts]:
             hit = solid.ray(o - n * 0.005, -n, WALL_DEPTH)
             if hit is not None: depth = min(depth, hit - 0.01)
+        # and only as far as the building goes: under its roof (open sky behind a wall is a street or a yard)
+        low = P[:, 1].min()
+        bottom = [np.array([q[0], low + 0.3 / U, q[2]]) for q in (c, P[0], P[1], P[2])]
+        bottom = [b + (c - b) * 0.1 for b in bottom]           # a little in from the edges
+        step = 1.0 / U
+        d = step
+        while d <= depth:
+            if any(roof.ray(b - n * d, UP, 300 / U) is None for b in bottom):
+                break
+            d += step
+        depth = min(depth, d - step)
         if depth < 0.2 / U: continue
+        F = P + n * WALL_OUT
         Q = P - n * depth
-        faces = [Q[::-1]]                                  # back
+        faces = [F, Q[::-1]]                               # front, back
         for i in range(3):
             a, b = i, (i + 1) % 3
-            faces += [np.array([P[b], P[a], Q[a]]), np.array([P[b], Q[a], Q[b]])]
+            faces += [np.array([F[b], F[a], Q[a]]), np.array([F[b], Q[a], Q[b]])]
         faces += [f[::-1] for f in faces]                  # both sides: never one-sided again
         key = (int(math.floor(c[0] / CELL)), int(math.floor(c[2] / CELL)))
         buckets.setdefault(key, []).extend(faces)
-        slabs += faces[:7]
+        slabs += faces[:8]
     for (cx, cz), faces in sorted(buckets.items()):
         for start in range(0, len(faces), 21000):
             verts, idx = [], []
@@ -69,7 +94,7 @@ def add_wall_thickness(k, walls, solid):
                     idx.append(len(verts))
                     verts.append((p[0] * U, p[1] * U, p[2] * U, fn[0], fn[1], fn[2], 0.0, 0.0, 1.0, 0.0, 0.0))
             if verts:
-                k.meshes.append(('1WALL_THICK_%d_%d_%d' % (cx, cz, start), verts, idx, 0, False))
+                k.meshes.append(('1WALL_SOLID_%d_%d_%d' % (cx, cz, start), verts, idx, mat, False))
     return slabs
 
 
@@ -92,7 +117,8 @@ def main(data, race_name, out, folder, ui_name):
     mat_index, tex_done = {}, {}
     collide_tris = []   # drivable (upward) faces: the ground
     solid_tris = []     # everything cars hit
-    thin_walls = []     # one-sided walls, to get a hidden thickness
+    thin_walls = []     # one-sided walls, to get a solid thickness
+    all_tris = []       # everything, drawn or not (what's overhead)
     buckets = {}
     for (kind, mat), tris in sorted(groups.items()):
         if mat not in mat_index:
@@ -116,6 +142,7 @@ def main(data, race_name, out, folder, ui_name):
             if s and abs(n[1]) < WALL_NY: s = 'WALL'
             if s and n[1] >= WALL_NY: collide_tris.append(P)
             if s: solid_tris.append(P)
+            all_tris.append(P)
             if s == 'WALL' and not two: thin_walls.append((P, n))
             cx = sum(p[0] for p in P) / 3; cz = sum(p[2] for p in P) / 3
             key = (s, mat, int(math.floor(cx / CELL)), int(math.floor(cz / CELL)))
@@ -139,7 +166,7 @@ def main(data, race_name, out, folder, ui_name):
             k.meshes.append((name, verts, idx, mat_index[mat], True))
 
     ground = geom.TriIndex(collide_tris)
-    wall_slabs = add_wall_thickness(k, thin_walls, geom.TriIndex(solid_tris))
+    wall_slabs = add_wall_thickness(k, thin_walls, geom.TriIndex(solid_tris), geom.TriIndex(all_tris))
 
     # checkpoints -> AC timing gates. C1 counts a lap at its last checkpoint, so that one is AC's
     # finish line (AC_TIME_0) and checkpoints 1..n-1 are the sector splits AC_TIME_1..n-1.
@@ -187,6 +214,9 @@ def main(data, race_name, out, folder, ui_name):
     hot = c - np.array(fin['forward']) * 8
     y = ground_y(ground, hot[0], hot[2], c[1] + 1.0); hot[1] = (y if y is not None else c[1]) + 0.1
     k.dummies.append(('AC_HOTLAP_START_0', dummy(hot, fin['forward'])))
+    # for Carmapeds: which C1 race this is, in the model itself (also in data/carmageddon.ini)
+    base = os.path.splitext(os.path.basename(c1track.find(data + '/RACES', race_name)))[0].upper()
+    k.dummies.append(('C1RACE_' + base, dummy((0, 0, 0), (0, 0, 1))))
 
     k.write(os.path.join(root, folder + '.kn5'), root=folder.upper())
 

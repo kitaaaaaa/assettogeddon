@@ -109,7 +109,8 @@ Use unmodified Carmageddon 1 data. Requires CSP 0.2.x.
   (500 at the middle skill level); the last lap starts with C1's "final lap" voice; after the race's laps (2 for
   Maim Street) comes RACE COMPLETED with its sound and the race's "all laps raced" bonus (10000), and the
   checkpoints stop counting until the session restarts. A wrong checkpoint plays C1's wrong-checkpoint sound.
-  The settings window says whether the track was recognised as one (and if not, where the app looked).
+  The app recognises such a track by a `C1RACE_<race>` node in its model (or its `data/carmageddon.ini`); the
+  settings window says whether it did.
 
 ## Approximations
 
@@ -166,7 +167,7 @@ luajit tests/explore_test.lua
 luajit tests/make_fake_c1.lua /tmp/fakec1 && luajit tests/smoke_test.lua /tmp/fakec1
 luajit tests/nospline_test.lua /tmp/fakec1
 sh tests/run_sync.sh /tmp/fakec1
-luajit tests/c1track_test.lua /tmp/fakec1 && C1T_INI=1 luajit tests/c1track_test.lua /tmp/fakec1
+luajit tests/c1track_test.lua /tmp/fakec1 && C1T_INI=1 luajit tests/c1track_test.lua /tmp/fakec1 && C1T_NODE=1 luajit tests/c1track_test.lua /tmp/fakec1
 ```
 
 `smoke_test.lua` runs the whole app against a mock of the CSP API (`tests/csp_mock.lua`) with synthetic data

@@ -55,11 +55,17 @@ local function countKeys(t) local n = 0 for _ in pairs(t) do n = n + 1 end retur
 -- Loading
 local FONT_UPSCALE = 3
 
--- A track converted from a Carmageddon 1 race says which race in its data/carmageddon.ini (RACE = its race
--- file, SCALE = metres per C1 world unit): its peds are then the race file's, on their C1 routes, and its
--- checkpoints work as in C1. Read with CSP's track data loader (it knows where the track's data is), or failing
--- that from the track's folder. Returns {file, scale}, or nil and why (shown in the settings window).
+-- A track converted from a Carmageddon 1 race says which race: in its data/carmageddon.ini (RACE = its race
+-- file, SCALE = metres per C1 world unit), and in its model, a node named C1RACE_<race> (found after the data
+-- is loaded, below). Its peds are then the race file's, on their C1 routes, and its checkpoints work as in C1.
+-- The ini is read with CSP's track data loader, or failing that from the track's folder. Returns {file,
+-- scale}, or nil and why (shown in the settings window).
 local c1race, c1raceNote
+-- whether the track's model has a node of this name
+local function trackHasNode(name)
+  local ok, m = pcall(function() return ac.findNodes(name):getWorldTransformationRaw() end)
+  return ok and m ~= nil
+end
 local function readTrackRace()
   if not (ac.getFolder and ac.FolderID and ac.FolderID.ContentTracks) then return nil, nil end  -- not AC (BeamNG)
   local tried = {}
@@ -121,6 +127,21 @@ local function startLoading()
     if c1race then log(('C1 track: race %s, %g m per unit'):format(c1race.file, c1race.scale)) elseif why then log(c1raceNote) end
     local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots, version = settings.dataVersion,
       race = c1race and c1race.file})
+    -- or the track's model names the race: a node C1RACE_<race file's name> (a dummy the converter adds)
+    if d and not c1race then
+      for _, race in ipairs(d.races or {}) do
+        local base = race.file and race.file:upper():match('^(.-)%.TXT$')
+        if base and trackHasNode('C1RACE_' .. base) then
+          local text = io_.read(d.dataDir .. '/RACES/' .. race.file)
+          local layout, lwhy = nil, 'not found'
+          if text then layout, lwhy = c1data.parseRaceLayout(text, d.method) end
+          c1race, c1raceNote = {file = race.file, scale = pedlogic.WORLD_SCALE}, nil
+          if layout then d.raceLayout = layout else log(('race %s: not read: %s'):format(race.file, lwhy)) end
+          log(('C1 track (its C1RACE_%s node): race %s'):format(base, race.file))
+          break
+        end
+      end
+    end
     if not d then
       if not io.fileExists(__dirname .. '/DATA/PEDESTRN.TXT') and not io.fileExists(__dirname .. '/DATA/BORING.TXT') then
         err = 'Copy the DATA folder from your Carmageddon 1 install into this app\'s folder ('

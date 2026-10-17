@@ -21,10 +21,12 @@ Pillow. Only race 1 (`CITYA1.TXT`, Maim Street in Bleak City) has been converted
 - **Surfaces**: the track's faces are drivable. A C1 material whose name starts with `0` is grass (C1's mud
   modifier: 0.7x grip, bumpy), `1` astroturf (0.85x); everything else is road. Faces steeper than 60 degrees are
   walls. Water (`!` materials) and the knock-over objects don't collide.
-- **Solid walls**: C1's walls are single faces, which AC cars can tunnel through. Each one-sided wall gets a
-  hidden 2.5 m thick slab behind it (`1WALL_THICK_...`, not drawn), cut short where anything else is behind the
-  wall so it never sticks out into a road (on Maim Street 5574 of 5760 walls; the rest have something right
-  behind them).
+- **Solid walls**: C1's walls are single faces, which AC cars can tunnel through. Each one-sided wall of a
+  building gets a solid slab (`1WALL_SOLID_...`): its front 5 cm in front of the wall's own face, its back up to
+  6 m into the building, only as far as the building's roof goes and cut short where anything else is behind the
+  wall, so it never sticks out into a street, a yard or a ped's route. The slabs are ordinary drawn meshes with a
+  fully see-through texture, so AC collides with them as it does with any wall (on Maim Street 3849 of 5760
+  walls; the rest are freestanding or have something right behind them).
 - **AI line** (`ai/fast_lane.ai`): the shortest way along C1's own opponent road network (the race file's path
   nodes and sections, one-way ones only forwards) through the checkpoints in order, starting on the finish line,
   corners rounded, a point a metre on the road surface, with the road's width each side (to a wall, kerb or
@@ -34,8 +36,8 @@ Pillow. Only race 1 (`CITYA1.TXT`, Maim Street in Bleak City) has been converted
   (`AC_TIME_0`), and checkpoints 1 to 7 are the sector splits.
 - **Grid**: 16 places (`AC_START_n`, also used as `AC_PIT_n`) two by two behind C1's grid position, facing its
   direction. `AC_HOTLAP_START_0` is 55 m before the finish line.
-- **`data/carmageddon.ini`**: which race the track came from. Carmapeds reads it and then uses that race's
-  peds and checkpoints (see the app's README).
+- **Which race it is**, for Carmapeds (which then uses that race's peds and checkpoints, see the app's
+  README): a dummy `C1RACE_CITYA1` in the model, and `data/carmageddon.ini`.
 - `map.png`, `data/map.ini`: a map of the roads. `ui/preview.png`: the view from pole position.
 
 ## Not done yet

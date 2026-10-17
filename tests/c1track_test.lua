@@ -17,10 +17,13 @@ f:write('[CARMAGEDDON]\r\nRACE=TRACKA1.TXT\r\nSCALE=10\r\n')
 f:close()
 
 -- C1T_INI=1: found by CSP's track data loader instead (as in AC; the file in the folder is the fallback)
-local viaIni = os.getenv('C1T_INI') == '1'
-local H = require('tests/csp_mock')({dataDir = fakeRoot, tracksDir = not viaIni and tracks or nil,
-  trackIni = viaIni and {['carmageddon.ini'] = {CARMAGEDDON = {RACE = 'TRACKA1.TXT', SCALE = 10}}} or nil})
-H.makeCar(0, 0, 550, 0)
+-- C1T_NODE=1: neither, only the track model's C1RACE_TRACKA1 node (then the scale is C1's 6.9 m)
+local viaIni, viaNode = os.getenv('C1T_INI') == '1', os.getenv('C1T_NODE') == '1'
+local K = viaNode and 6.9 or 10   -- metres per C1 unit
+local H = require('tests/csp_mock')({dataDir = fakeRoot, tracksDir = not viaIni and not viaNode and tracks or nil,
+  trackIni = viaIni and {['carmageddon.ini'] = {CARMAGEDDON = {RACE = 'TRACKA1.TXT', SCALE = 10}}} or nil,
+  nodes = viaNode and {C1RACE_TRACKA1 = true} or nil})
+H.makeCar(0, 0, 55 * K, 0)
 H.makeCar(1, 30, -900, 0)
 H.load(400)
 for _ = 1, 400 do H.frame() end
@@ -37,21 +40,21 @@ for _, p in ipairs(race) do byId[p.id] = p end
 local p1, p2 = byId[1], byId[2]
 check(p1 and p1.def.ref == 1 and p2 and p2.def.ref == 1, 'ids 1 and 2, of the race file\'s type')
 if p1 then
-  -- route (20,0,0) (20,0,4) (24,0,4) x 10 m: 40 + 40 m, starting at its second point
-  check(math.abs(p1.homePath.length - 80) < 1e-6, 'route length 80 m: ' .. p1.homePath.length)
-  check(math.abs(p1.initialS - 40) < 1e-6, 'starts at its 2nd point (40 m along): ' .. p1.initialS)
+  -- route (20,0,0) (20,0,4) (24,0,4) x K m: 4 + 4 units, starting at its second point
+  check(math.abs(p1.homePath.length - 8 * K) < 1e-6, 'route length 8 units: ' .. p1.homePath.length)
+  check(math.abs(p1.initialS - 4 * K) < 1e-6, 'starts at its 2nd point (4 units along): ' .. p1.initialS)
   local last = p1.homePath.n
-  check(math.abs(p1.homePath.x[last] - 240) < 1e-6 and math.abs(p1.homePath.z[last] - 40) < 1e-6, 'route ends at (240, 40)')
+  check(math.abs(p1.homePath.x[last] - 24 * K) < 1e-6 and math.abs(p1.homePath.z[last] - 4 * K) < 1e-6, 'route ends at (24, 4) units')
   for i = 2, last - 1 do
     check(math.abs(p1.homePath.s[i] - p1.homePath.s[i - 1] - 1.5) < 1e-6, 'samples every 1.5 m (as paths.at expects)')
   end
 end
 if p2 then
-  check(p2.homePath.n == 1 and p2.homePath.x[1] == -200 and p2.homePath.z[1] == 300, 'single-point ped at (-200, 300)')
+  check(p2.homePath.n == 1 and math.abs(p2.homePath.x[1] + 20 * K) < 1e-6 and math.abs(p2.homePath.z[1] - 30 * K) < 1e-6, 'single-point ped at (-20, 30) units')
   check(math.abs(p2.homePath.y[1]) < 1, 'its C1 height 1000 means on the ground: y ' .. p2.homePath.y[1])
 end
 
--- checkpoints: z = 100 and z = 600 (x -50..50); 2 laps
+-- checkpoints: z = 10 and 60 units (x -5..5); 2 laps
 local function creditsOf(i) local sc = H.state().scores[i] return sc and sc.credits or 0 end
 local function sounds(id)
   local n = 0
@@ -64,23 +67,23 @@ local function drive(z0, z1)
   for _ = 1, 3 do H.frame() end
 end
 local c0 = creditsOf(0)
-drive(550, 650)  -- through the 2nd checkpoint first: wrong
+drive(55 * K, 65 * K)  -- through the 2nd checkpoint first: wrong
 check(sounds(8013) == 1, 'wrong checkpoint sound: ' .. sounds(8013))
 check(creditsOf(0) == c0, 'no credits for a wrong checkpoint')
-H.placeCar(0, 0, 50, 0, 0) H.frame() H.frame()  -- back to the start (a teleport: nothing crossed)
-drive(50, 650)   -- checkpoint 1, then 2: lap 1 done, the final lap starts
+H.placeCar(0, 0, 5 * K, 0, 0) H.frame() H.frame()  -- back to the start (a teleport: nothing crossed)
+drive(5 * K, 65 * K)   -- checkpoint 1, then 2: lap 1 done, the final lap starts
 check(creditsOf(0) - c0 == 1000, 'two checkpoints: 2 x 500 credits (middle skill level): ' .. (creditsOf(0) - c0))
 check(sounds(8012) == 1 and sounds(8014) == 1, 'checkpoint sound, then the final lap voice instead: '
   .. sounds(8012) .. ', ' .. sounds(8014))
 local banners = 0
 for _, b in ipairs(H.state().bannerQueue) do if b.def == require('src/scoring').BANNER.checkpoint then banners = banners + 1 end end
 check(banners >= 1, 'CHECKPOINT banner shown')
-H.placeCar(0, 0, 50, 0, 0) H.frame() H.frame()
-drive(50, 650)   -- lap 2: checkpoint 1, then the race is completed
+H.placeCar(0, 0, 5 * K, 0, 0) H.frame() H.frame()
+drive(5 * K, 65 * K)   -- lap 2: checkpoint 1, then the race is completed
 check(creditsOf(0) - c0 == 1500 + 10000, 'third checkpoint + "all laps raced" bonus 10000: ' .. (creditsOf(0) - c0))
 check(sounds(8011) == 1, 'race completed sound')
-H.placeCar(0, 0, 50, 0, 0) H.frame() H.frame()
-drive(50, 650)   -- after the race: nothing
+H.placeCar(0, 0, 5 * K, 0, 0) H.frame() H.frame()
+drive(5 * K, 65 * K)   -- after the race: nothing
 check(creditsOf(0) - c0 == 11500, 'nothing after the race is completed')
 check(creditsOf(1) == 0, 'the other car crossed nothing')
 
