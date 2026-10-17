@@ -3,7 +3,7 @@ PC game's textures (baked onto the Android model's texture layout, one AC skin p
 translated from the PC car file's mechanics (dethrace loading.c LoadCar / car.c).
 
 usage: python c1car_to_ac.py <PC DATA dir> <Android car folder> <out dir> <AC car folder> "<UI name>"
-           <PC car file> [<skin name>=<PC car file> ...]
+           <PC car file> [<skin name>=<PC car file> ...] [driver=<an AC car folder to take the driver from>]
 e.g.   python c1car_to_ac.py DATA BLKEAGLE out c1_eagle "Eagle (Carmageddon)" BLKEAGLE.TXT
            black=EAGBLAK.TXT blue=EAGBLUE.TXT green=EAGGREE.TXT white=EAGWHIE.TXT yellow=EAGYELE.TXT
 
@@ -327,7 +327,33 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
     W('setup.ini', ini([('DISPLAY_METHOD', [('SHOW_CLICKS', 1)]), ('GEARS', [('USE_GEARSET', 0)])]))
 
 
+def add_driver(root, donor, eyes):
+    """A driver from another AC car (its driver3d.ini, driver pose and the animations it names), moved so the
+    driver's eyes are at this car's: CSP expects every car to have one (C1 cars have none of their own)."""
+    import re, shutil
+    def eyes_of(car_ini):
+        m = re.search(r'^\s*DRIVEREYES\s*=\s*([^;\r\n]+)', open(car_ini, encoding='latin1').read(), re.M)
+        return [float(x) for x in m.group(1).split(',')]
+    shift = np.array(eyes) - eyes_of(os.path.join(donor, 'data', 'car.ini'))
+    out, section = [], None
+    for line in open(os.path.join(donor, 'data', 'driver3d.ini'), encoding='latin1'):
+        line = line.rstrip('\r\n')
+        m = re.match(r'\s*\[([^\]]+)\]', line)
+        if m: section = m.group(1)
+        k = re.match(r'\s*(\w+)\s*=\s*([^;]*)', line)
+        if section == 'MODEL' and k and k.group(1) == 'POSITION':
+            line = 'POSITION=' + f3(np.array([float(x) for x in k.group(2).split(',')]) + shift)
+        elif k and k.group(2).strip().lower().endswith('.ksanim'):
+            os.makedirs(os.path.join(root, 'animations'), exist_ok=True)
+            shutil.copy(os.path.join(donor, 'animations', k.group(2).strip()), os.path.join(root, 'animations'))
+        out.append(line)
+    open(os.path.join(root, 'data', 'driver3d.ini'), 'w', newline='\r\n').write('\n'.join(out) + '\n')
+    shutil.copy(os.path.join(donor, 'driver_base_pos.knh'), root)
+
+
 def main(data, android, out, car_id, ui_name, car_txt, *skins):
+    donor = next((s.split('=', 1)[1] for s in skins if s.startswith('driver=')), None)
+    skins = [s for s in skins if not s.startswith('driver=')]
     meshes = android_meshes(android)
     root = os.path.join(out, car_id)
     for d in ('', 'data', 'ui', 'skins'):
@@ -417,6 +443,8 @@ def main(data, android, out, car_id, ui_name, car_txt, *skins):
     head = np.array(mech['head'])
     eyes = head * PC_TO_AC
     write_data(os.path.join(root, 'data'), car_id, ui_name, p, wheels, radius, width * 0.5, collider, eyes)
+    if donor:
+        add_driver(root, donor, eyes)
 
     # skins
     for skin, txt in paints:
