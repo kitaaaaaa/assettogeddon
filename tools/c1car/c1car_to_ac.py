@@ -393,7 +393,12 @@ def use_suspension(root, donor):
             skip = line.strip().startswith('[ENGINE_MAPS]')
         if not skip: out.append(line)
     open(os.path.join(root, 'data', 'setup.ini'), 'w', newline='\r\n').write('\n'.join(out) + '\n')
-    shutil.copy(os.path.join(dd, 'final.rto'), os.path.join(root, 'data'))
+    # the donor's final drive choices, with this car's own (C1's) among them in ratio order
+    final = float(re.search(r'^FINAL=([\d.]+)', open(os.path.join(root, 'data', 'drivetrain.ini')).read(), re.M).group(1))
+    rto = [l for l in open(os.path.join(dd, 'final.rto'), encoding='latin1').read().splitlines() if l.strip()]
+    at = next((i for i, l in enumerate(rto) if float(l.split('|')[1]) > final), len(rto))
+    rto.insert(at, 'C1|%.3f' % final)
+    open(os.path.join(root, 'data', 'final.rto'), 'w', newline='\r\n').write('\n'.join(rto) + '\n')
 
 
 def main(data, android, out, car_id, ui_name, car_txt, *skins):
