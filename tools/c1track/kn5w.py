@@ -33,6 +33,14 @@ class KN5:
         self.materials = []   # dicts
         self.meshes = []      # (name, verts, indices, material index, casts shadows)
         self.dummies = []     # (name, 4x4 rows)
+        self.objects = []     # (name, 4x4 rows, [(mesh name, verts, indices, material index, casts shadows)])
+
+    def collider_material(self):
+        """A material with a fully transparent, alpha-tested texture: drawn, so AC collides with it, but invisible."""
+        if not hasattr(self, '_collider'):
+            self.textures.append(('C1_COLLIDER.dds', dds(np.zeros((4, 4, 4), np.uint8))))
+            self._collider = self.material('C1_COLLIDER', 'C1_COLLIDER.dds', alpha_test=True)
+        return self._collider
 
     def material(self, name, texture, alpha_test=False):
         self.materials.append({'name': name, 'tex': texture, 'at': alpha_test})
@@ -56,11 +64,19 @@ class KN5:
             w.s('ksEmissive'); w.f(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
             w.i(1); w.s('txDiffuse'); w.i(0); w.s(m['tex'])
         # root dummy holding everything
-        w.i(1); w.s(root); w.i(len(self.meshes) + len(self.dummies)); w.u8(1)
+        w.i(1); w.s(root); w.i(len(self.meshes) + len(self.dummies) + len(self.objects)); w.u8(1)
         w.f(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
         for name, M in self.dummies:
             w.i(1); w.s(name); w.i(0); w.u8(1); w.f(*[x for r in M for x in r])
-        for name, verts, idx, mat, shadows in self.meshes:
+        for name, M, meshes in self.objects:
+            w.i(1); w.s(name); w.i(len(meshes)); w.u8(1); w.f(*[x for r in M for x in r])
+            for mesh in meshes: self._mesh(w, *mesh)
+        for mesh in self.meshes:
+            self._mesh(w, *mesh)
+        open(path, 'wb').write(w.b)
+
+    @staticmethod
+    def _mesh(w, name, verts, idx, mat, shadows):
             w.i(2); w.s(name); w.i(0); w.u8(1)
             w.u8(1 if shadows else 0); w.u8(1); w.u8(0)   # casts shadows, visible, transparent
             w.i(len(verts))
@@ -69,4 +85,3 @@ class KN5:
             w.i(mat); w.i(0); w.f(0.0, 0.0)
             P = np.array([v[:3] for v in verts]); c = (P.min(0) + P.max(0)) / 2
             w.f(*c, float(np.sqrt(((P - c) ** 2).sum(1)).max())); w.u8(1)  # renderable
-        open(path, 'wb').write(w.b)

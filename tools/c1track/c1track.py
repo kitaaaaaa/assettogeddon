@@ -171,8 +171,9 @@ class Track:
             if f: self.models.update(brender.read_dat(f))
         return self.models.get(k)
 
-    def triangles(self):
-        """{(kind, material): [((p0,p1,p2), (uv0,uv1,uv2))]} in world units. kind: 'track' or 'noncar'."""
+    def triangles(self, movable=()):
+        """{(kind, material): [((p0,p1,p2), (uv0,uv1,uv2))]} in world units. kind: 'track' or 'noncar'.
+        Noncars whose model is in movable are left out (self.noncars still lists every placed noncar)."""
         out = {}
         roots = brender.read_act(find(self.D + '/ACTORS', self.actor_file))
         extra = find(self.D + '/ACTORS', self.race['extra_actor'])
@@ -185,7 +186,7 @@ class Track:
                 kind = 'noncar'
                 self.noncars.append((a.name, a.model, m))
             mat = a.material or mat
-            if a.model:
+            if a.model and not (kind == 'noncar' and a.model.upper() in movable):
                 md = self.model(a.model)
                 if md: self.add(out, md, m, kind, mat)
             for c in a.children: walk(c, m, kind, mat)
@@ -200,3 +201,21 @@ class Track:
             P = tuple(xform(m, md.verts[f[k]]) for k in range(3))
             U = tuple(md.uvs[f[k]] if f[k] < len(md.uvs) else (0.0, 0.0) for k in range(3))
             out.setdefault((kind, mat), []).append((P, U))
+
+
+def noncar_specs(data_dir):
+    """C1's knock-over objects (DATA/NONCARS/*.TXT): {object number: {'file', 'mass' (tonnes)}}. The number is the
+    one in its models' names (&05LITE.DAT is object 05)."""
+    out = {}
+    for f in sorted(glob.glob(data_dir + '/NONCARS/*.TXT')):
+        r = RaceFile(open(f, 'rb').read())
+        try:
+            num = r.int()
+            for _ in range(4): r.line()           # centres of mass, bounds
+            for _ in range(r.int()): r.line()     # extra points
+            mass = r.nums()[0]
+        except (EOFError, ValueError, IndexError):
+            continue
+        out[num] = {'file': os.path.basename(f).upper(), 'mass': mass}
+    return out
+

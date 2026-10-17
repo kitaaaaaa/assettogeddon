@@ -9,13 +9,15 @@ import os, sys, json, math
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import c1track, textures, kn5w, geom, ailine
+import c1track, textures, kn5w, geom, ailine, solids
 
 U = 6.9            # metres per C1 world unit
 CELL = 40.0        # C1 units per mesh tile (split for culling)
 TEX_SCALE = 4      # nearest-neighbour upscale, keeps C1's pixel look under AC's filtering
 TEX_MAX = 512
 WALL_NY = 0.5      # faces steeper than this are WALL
+# knock-over objects that are pushable (AC physics objects, like cones), by their C1 file in DATA/NONCARS
+MOVABLE = ('WRECK.TXT', 'GREENCAR.TXT', 'TRAFF.TXT', 'PEDCROSS.TXT', 'PHONE.TXT')
 WALL_DEPTH = 6.0 / U  # C1 units: solid thickness behind one-sided walls (AC cars tunnel through bare faces)
 WALL_OUT = 0.05 / U   # its front: just in front of the wall's own face
 
@@ -39,55 +41,39 @@ def ground_y(index, x, z, ymax):
     return index.below(x, z, ymax)[0]
 
 
-UP = np.array([0.0, 1.0, 0.0])
+def open_points(race, ground):
+    """Where C1 itself drives and walks: its opponents' road network and every ped route, sampled every
+    metre on the ground, 0.3 m and 1.6 m up (C1 units). The solids never fill these."""
+    lines = []
+    N = [np.array(n, float) for n in race['path_nodes']]
+    for sec in race['path_sections']:
+        lines.append((N[sec['a']], N[sec['b']]))
+    for ped in race['peds']:
+        if ped['ref'] >= 100: continue
+        pts = [np.array([v[0], v[1] - 1000 if v[1] >= 500 else v[1], v[2]]) for k, v in ped['instructions'] if k == 'point']
+        lines += list(zip(pts, pts[1:])) or [(pts[0], pts[0])]
+    out = []
+    for a, b in lines:
+        for s in np.linspace(0, 1, max(2, int(np.linalg.norm(b - a) * U) + 1)):
+            q = a + (b - a) * s
+            y, _ = ground.below(q[0], q[2], q[1] + 8 / U)
+            y = y if y is not None and q[1] - y < 12 / U else q[1]
+            out += [[q[0], y + 0.3 / U, q[2]], [q[0], y + 1.6 / U, q[2]]]
+    return np.array(out)
 
 
-def add_wall_thickness(k, walls, solid, roof):
-    """A solid slab for each one-sided wall: from just in front of its face back WALL_DEPTH into the building,
-    cut short where something else is behind it (the other side of a thin wall, a road), so it never sticks
-    out of the building. Drawn see-through (a fully transparent, alpha-tested texture) rather than hidden, so
-    AC treats it as the ordinary wall mesh it collides with."""
-    clear = np.zeros((4, 4, 4), np.uint8)
-    k.textures.append(('C1_COLLIDER.dds', kn5w.dds(clear)))
-    mat = k.material('C1_COLLIDER', 'C1_COLLIDER.dds', alpha_test=True)
+def add_solids(k, faces):
+    """The solid fill and wall slabs (solids.py) as collision meshes: ordinary drawn meshes with a fully
+    see-through texture (AC collides with them as with any wall), named 1WALL_SOLID_...."""
+    mat = k.collider_material()
     buckets = {}
-    slabs = []
-    for P, n in walls:
-        P = np.array(P); c = P.mean(0)
-        depth = WALL_DEPTH
-        # what's behind, checked across the whole face (a grid of points over the triangle)
-        N = 6
-        pts = [P[0] * (N - i - j) / N + P[1] * i / N + P[2] * j / N
-               for i in range(N + 1) for j in range(N + 1 - i)]
-        for o in [c] + [c + (p - c) * 0.97 for p in pts]:
-            hit = solid.ray(o - n * 0.005, -n, WALL_DEPTH)
-            if hit is not None: depth = min(depth, hit - 0.01)
-        # and only as far as the building goes: under its roof (open sky behind a wall is a street or a yard)
-        low = P[:, 1].min()
-        bottom = [np.array([q[0], low + 0.3 / U, q[2]]) for q in (c, P[0], P[1], P[2])]
-        bottom = [b + (c - b) * 0.1 for b in bottom]           # a little in from the edges
-        step = 1.0 / U
-        d = step
-        while d <= depth:
-            if any(roof.ray(b - n * d, UP, 300 / U) is None for b in bottom):
-                break
-            d += step
-        depth = min(depth, d - step)
-        if depth < 0.2 / U: continue
-        F = P + n * WALL_OUT
-        Q = P - n * depth
-        faces = [F, Q[::-1]]                               # front, back
-        for i in range(3):
-            a, b = i, (i + 1) % 3
-            faces += [np.array([F[b], F[a], Q[a]]), np.array([F[b], Q[a], Q[b]])]
-        faces += [f[::-1] for f in faces]                  # both sides: never one-sided again
-        key = (int(math.floor(c[0] / CELL)), int(math.floor(c[2] / CELL)))
-        buckets.setdefault(key, []).extend(faces)
-        slabs += faces[:8]
-    for (cx, cz), faces in sorted(buckets.items()):
-        for start in range(0, len(faces), 21000):
+    for F in faces:
+        c = F.mean(0)
+        buckets.setdefault((int(math.floor(c[0] / CELL)), int(math.floor(c[2] / CELL))), []).append(F)
+    for (cx, cz), fs in sorted(buckets.items()):
+        for start in range(0, len(fs), 21000):
             verts, idx = [], []
-            for F in faces[start:start + 21000]:
+            for F in fs[start:start + 21000]:
                 fn = normal(F)
                 if fn is None: continue
                 for p in F:
@@ -95,7 +81,66 @@ def add_wall_thickness(k, walls, solid, roof):
                     verts.append((p[0] * U, p[1] * U, p[2] * U, fn[0], fn[1], fn[2], 0.0, 0.0, 1.0, 0.0, 0.0))
             if verts:
                 k.meshes.append(('1WALL_SOLID_%d_%d_%d' % (cx, cz, start), verts, idx, mat, False))
-    return slabs
+
+
+def add_movable_objects(k, t, movable, material):
+    """Each placed movable noncar as an AC physics object: a node AC_POBJECT_<kind>_<n> at the object's
+    centre, holding a see-through box mesh of the same name (what it collides with) and the object's own
+    meshes. Returns {kind: (mass kg, box size m)} for CSP's [DYNAMIC_OBJECTS_...]."""
+    collider = k.collider_material()
+    kinds, count = {}, {}
+    for name, model, M in t.noncars:
+        if model.upper() not in movable: continue
+        kind, mass = movable[model.upper()]
+        md = t.model(model)
+        if not md or not md.verts: continue
+        V = np.array(md.verts, float)
+        lo, hi = V.min(0), V.max(0)
+        c = (lo + hi) / 2
+        size = (hi - lo) * U
+        kinds[kind] = (mass, size)
+        n = count.get(kind, 0); count[kind] = n + 1
+        oname = 'AC_POBJECT_%s_%d' % (kind, n)
+        X, Y, Z = (np.array(M[i], float) for i in range(3))
+        T = (np.array(M[3], float) + c[0] * X + c[1] * Y + c[2] * Z) * U
+        meshes = [(oname, *_box_mesh(size / 2), collider, False)]
+        by_mat = {}
+        for i, f in enumerate(md.faces):
+            mi = md.face_mats[i] if i < len(md.face_mats) else 0
+            mat = (md.materials[mi - 1] if 0 < mi <= len(md.materials) else 'DEFAULT').upper()
+            P = (V[list(f[:3])] - c) * U
+            UVs = [md.uvs[j] if j < len(md.uvs) else (0.0, 0.0) for j in f[:3]]
+            nrm = normal(P)
+            if nrm is None: continue
+            m = t.mats.get(mat)
+            faces = [(P, UVs, nrm)]
+            if m and m.flags & c1track.TWO_SIDED: faces.append((P[::-1], UVs[::-1], -nrm))
+            by_mat.setdefault(mat, []).extend(faces)
+        for j, (mat, faces) in enumerate(sorted(by_mat.items())):
+            verts, idx = [], []
+            for P, UVs, nrm in faces:
+                for p, uv in zip(P, UVs):
+                    idx.append(len(verts))
+                    verts.append((p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], uv[0], uv[1], 1.0, 0.0, 0.0))
+            meshes.append(('C1OBJ_%s_%d_%d' % (kind, n, j), verts, idx, material(mat), True))
+        k.objects.append((oname, [[*X, 0], [*Y, 0], [*Z, 0], [*T, 1]], meshes))
+    return kinds
+
+
+def _box_mesh(h):
+    """A box of half sizes h around the origin, both windings: (verts, indices)."""
+    corners = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)], float) * h
+    quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    verts, idx = [], []
+    for q in quads:
+        for tri in ((q[0], q[1], q[2]), (q[0], q[2], q[3])):
+            for order in (tri, tri[::-1]):
+                P = corners[list(order)]
+                nrm = normal(P)
+                for p in P:
+                    idx.append(len(verts))
+                    verts.append((p[0], p[1], p[2], nrm[0], nrm[1], nrm[2], 0.0, 0.0, 1.0, 0.0, 0.0))
+    return verts, idx
 
 
 def dummy(pos, fwd):
@@ -108,7 +153,13 @@ def dummy(pos, fwd):
 def main(data, race_name, out, folder, ui_name):
     t = c1track.Track(data, race_name)
     race = t.race
-    groups = t.triangles()
+    specs = c1track.noncar_specs(data)
+    movable = {}   # model name -> (object kind, mass in kg)
+    for name in set(m for m in os.listdir(os.path.join(data, 'MODELS')) if m.startswith('&')):
+        num = name[1:3]
+        if num.isdigit() and int(num) in specs and specs[int(num)]['file'] in MOVABLE:
+            movable[name.upper()] = (specs[int(num)]['file'][:-4], specs[int(num)]['mass'] * 1000)
+    groups = t.triangles(movable)
     root = os.path.join(out, folder)
     for d in ('', 'data', 'ui'):
         os.makedirs(os.path.join(root, d), exist_ok=True)
@@ -117,10 +168,11 @@ def main(data, race_name, out, folder, ui_name):
     mat_index, tex_done = {}, {}
     collide_tris = []   # drivable (upward) faces: the ground
     solid_tris = []     # everything cars hit
-    thin_walls = []     # one-sided walls, to get a solid thickness
-    all_tris = []       # everything, drawn or not (what's overhead)
+    walls = []          # every vertical face: (triangle, normal, two-sided)
+    up_faces = []       # one-sided upward faces: what's under them is filled
+    scene_tris = []     # all of the track's own geometry
     buckets = {}
-    for (kind, mat), tris in sorted(groups.items()):
+    def material(mat):
         if mat not in mat_index:
             img, holes = textures.material_image(t, mat)
             m = t.mats.get(mat)
@@ -132,6 +184,9 @@ def main(data, race_name, out, folder, ui_name):
                 k.textures.append((tex, kn5w.dds(big)))
                 tex_done[tex] = True
             mat_index[mat] = k.material(mat.replace('.MAT', ''), tex, alpha_test=holes)
+        return mat_index[mat]
+    for (kind, mat), tris in sorted(groups.items()):
+        material(mat)
         m = t.mats.get(mat)
         two = bool(m and m.flags & c1track.TWO_SIDED)
         surf = surface_of(mat) if kind == 'track' else None
@@ -142,8 +197,9 @@ def main(data, race_name, out, folder, ui_name):
             if s and abs(n[1]) < WALL_NY: s = 'WALL'
             if s and n[1] >= WALL_NY: collide_tris.append(P)
             if s: solid_tris.append(P)
-            all_tris.append(P)
-            if s == 'WALL' and not two: thin_walls.append((P, n))
+            if kind == 'track': scene_tris.append(P)
+            if s == 'WALL': walls.append((P, n, two))
+            if s and s != 'WALL' and not two: up_faces.append(P)
             cx = sum(p[0] for p in P) / 3; cz = sum(p[2] for p in P) / 3
             key = (s, mat, int(math.floor(cx / CELL)), int(math.floor(cz / CELL)))
             faces = [(P, UV, n)]
@@ -158,15 +214,24 @@ def main(data, race_name, out, folder, ui_name):
                 for p, uv in zip(P, UV):
                     idx.append(len(verts))
                     verts.append((p[0] * U, p[1] * U, p[2] * U, n[0], n[1], n[2], uv[0], uv[1], 1.0, 0.0, 0.0))
-            base = mat.replace('.MAT', '').replace('!', 'X').replace('&', 'N')
-            prefix = '1%s_' % s if s else ''
+            # lower case: AC finds a surface key anywhere in a mesh name (MWALLIT would read as WALL too)
+            base = mat.replace('.MAT', '').replace('!', 'X').replace('&', 'N').lower()
+            prefix = '1%s_' % s if s else 'V_'     # drawn only: never a leading digit (AC reads that as a surface)
             name = '%s%s_%d_%d' % (prefix, base, cx, cz)
             counts[name] = counts.get(name, 0) + 1
             if counts[name] > 1: name += '_%d' % counts[name]
             k.meshes.append((name, verts, idx, mat_index[mat], True))
 
     ground = geom.TriIndex(collide_tris)
-    wall_slabs = add_wall_thickness(k, thin_walls, geom.TriIndex(solid_tris), geom.TriIndex(all_tris))
+    opened = open_points(race, ground)
+    fill, pieces = solids.roof_fill(up_faces, [w[0] for w in walls], scene_tris, opened)
+    slabs = solids.wall_slabs(walls, opened)
+    add_solids(k, fill + slabs)
+    print('solid: %d filled pieces under %d upward faces, %d wall slabs' % (pieces, len(up_faces), len(walls)))
+    dynamic = add_movable_objects(k, t, movable, material)
+    colliders = solids.noncar_colliders(t, U, skip=movable)
+    lamps = solids.lamp_lights(t, U)
+    wall_slabs = fill + slabs
 
     # checkpoints -> AC timing gates. C1 counts a lap at its last checkpoint, so that one is AC's
     # finish line (AC_TIME_0) and checkpoints 1..n-1 are the sector splits AC_TIME_1..n-1.
@@ -227,7 +292,7 @@ def main(data, race_name, out, folder, ui_name):
     print('AI line: %d points, %.2f km' % (len(P), length[-1] / 1000))
 
     race['file'] = os.path.basename(c1track.find(data + '/RACES', race_name)).upper()
-    write_data(root, t, race, ui_name, len(slots))
+    write_data(root, t, race, ui_name, len(slots), colliders, lamps, dynamic)
     write_map(root, t, groups)
     json.dump({'source': race_name, 'units_to_metres': U, 'gates': gates,
                'grid': [list(map(float, p)) for p in slots]},
@@ -245,7 +310,7 @@ KEY=ROAD
 FRICTION=0.99
 DAMPING=0
 WAV=
-WAV_PITCH=0
+WAV_PITCH=extended-0
 FF_EFFECT=NULL
 DIRT_ADDITIVE=0
 IS_VALID_TRACK=1
@@ -306,8 +371,48 @@ VIBRATION_LENGTH=0
 """
 
 
-def write_data(root, t, race, ui_name, pits):
-    open(os.path.join(root, 'data', 'surfaces.ini'), 'w', newline='\r\n').write(SURFACES)
+def v3(v):
+    return '%.3f, %.3f, %.3f' % tuple(v)
+
+
+def physics_ini(colliders, dynamic):
+    """CSP extended track physics (enabled by WAV_PITCH=extended-0 above): hard collisions with the buildings
+    and solids, and a geometric collider for each street object."""
+    out = ['', '[_EXTENSION]', 'COLLIDER_DEBUG = 0', '',
+           '; buildings, their solid fill and wall slabs: hard collisions, so cars stop at them instead of sinking in',
+           '[COLLISION_PARAMS_BUILDINGS]', 'MESHES = 1WALL_?', 'INTENSITY = 1', 'MAX_DEPTH = 0.1',
+           'RIGID_WITH_BODIES = 1', 'RIGID_WITH_BOXES = 1', '',
+           '[COLLISION_PARAMS_STREET_OBJECTS]', 'COLLIDERS = C1_?', 'INTENSITY = 1', 'MAX_DEPTH = 0.1',
+           'RIGID_WITH_BODIES = 1', 'RIGID_WITH_BOXES = 1', '']
+    # the pushable objects: C1's own mass, a box collider of the object's size
+    for kind, (mass, size) in sorted(dynamic.items()):
+        out += ['[DYNAMIC_OBJECTS_%s]' % kind, 'MESHES = AC_POBJECT_%s_?' % kind, 'MASS = %g' % mass,
+                'NO_MESH_COLLIDER = 1', 'COLLIDER_BOX_0 = ' + v3(size), 'INTERCOLLISION = 1',
+                'LINEAR_DAMPING = 0.2', 'ANGULAR_DAMPING = 0.2', 'FRICTION = 0.6', 'BOUNCE = 0.2', 'INTENSITY = 1', '']
+    for i, c in enumerate(colliders):
+        name = 'C1_' + c[0].replace('.ACT', '').replace('&', '').replace('%', '')
+        if c[1] == 'capsule':
+            out += ['[COLLIDER_CAPSULE_%d]' % i, 'NAME = %s' % name, 'FROM = ' + v3(c[2]), 'TO = ' + v3(c[3]),
+                    'RADIUS = %.3f' % c[4], '']
+        else:
+            out += ['[COLLIDER_BOX_%d]' % i, 'NAME = %s' % name, 'POSITION = ' + v3(c[2]), 'SIZE = ' + v3(c[3]),
+                    'DIRECTION = ' + v3(c[4]), 'UP = ' + v3(c[5]), '']
+    return '\n'.join(out)
+
+
+def lights_ini(lamps):
+    """CSP lights (extension/ext_config.ini): one under each lamp post's head, on at night."""
+    out = ['[LIGHT_SERIES_C1_LAMPS]', 'DESCRIPTION = Carmageddon street lamps', 'SPOT = 150', 'SPOT_SHARPNESS = 0.2',
+           'RANGE = 35', 'COLOR = 1, 0.82, 0.55, 12', 'DIRECTION = 0, -1, 0', 'CONDITION = NightLights']
+    for i, p in enumerate(lamps):
+        out.append('POSITION_%d = %s' % (i, v3(p - np.array([0, 0.3, 0]))))
+    return '\n'.join(out) + '\n'
+
+
+def write_data(root, t, race, ui_name, pits, colliders, lamps, dynamic):
+    open(os.path.join(root, 'data', 'surfaces.ini'), 'w', newline='\r\n').write(SURFACES + physics_ini(colliders, dynamic))
+    os.makedirs(os.path.join(root, 'extension'), exist_ok=True)
+    open(os.path.join(root, 'extension', 'ext_config.ini'), 'w', newline='\r\n').write(lights_ini(lamps))
     # for Carmapeds: the race whose peds and checkpoints belong here (read from its own C1 DATA)
     open(os.path.join(root, 'data', 'carmageddon.ini'), 'w', newline='\r\n').write(
         '[CARMAGEDDON]\nRACE=%s\nSCALE=%g\n' % (race['file'], U))
@@ -343,4 +448,6 @@ def write_map(root, t, groups, scale_px=2.0):
 
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
     main(*sys.argv[1:6])
