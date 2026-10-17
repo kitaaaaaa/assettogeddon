@@ -165,7 +165,12 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
     W = lambda name, text: open(os.path.join(d, name), 'w', newline='\r\n').write(text)
     lf, rf, lr, rr = wheels['LF'], wheels['RF'], wheels['LR'], wheels['RR']
     cgy, cgz = p['cg_height'], p['cg_z']
-    steer_ratio = 450 / p['lock_deg']
+    # steering: the rack moves LINEAR_STEER_ROD_RATIO m per STEER_RATIO degrees of steering wheel, so a ratio of
+    # (steering arm length) x pi/180 turns the wheels 1 degree per STEER_RATIO degrees; STEER_RATIO is negative
+    # with the arm behind the hub (WBTYRE_STEER z < 0, as here)
+    steer_arm = 0.25
+    steer_ratio = -450 / p['lock_deg']
+    rod_ratio = steer_arm * math.pi / 180
     W('car.ini', ini([
         ('HEADER', [('VERSION', 'extended-2')]),       # CSP extended car physics
         ('INFO', [('SCREEN_NAME', ui_name), ('SHORT_NAME', ui_name.split(' (')[0])]),
@@ -177,7 +182,7 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
                       ('SHAKE_MUL', 3.0), ('USE_ANIMATED_SUSPENSIONS', 0), ('FUEL_LIGHT_MIN_LITERS', 3),
                       ('BUMPER_CAMERA_PITCH', 0), ('BONNET_CAMERA_PITCH', 0), ('CHASE_CAMERA_PITCH', 0)]),
         ('CONTROLS', [('FFMULT', 1.5), ('STEER_ASSIST', 1), ('STEER_LOCK', 450),
-                      ('STEER_RATIO', '%.2f' % steer_ratio), ('LINEAR_STEER_ROD_RATIO', 0.0)]),
+                      ('STEER_RATIO', '%.2f' % steer_ratio), ('LINEAR_STEER_ROD_RATIO', '%.5f' % rod_ratio)]),
         ('FUEL', [('CONSUMPTION', 0.004), ('FUEL', 60), ('MAX_FUEL', 60)]),
         ('FUELTANK', [('POSITION', f3((0, -0.2, -1.5)))]),
         ('RIDE', [('PICKUP_FRONT_HEIGHT', '%.3f' % -cgy), ('PICKUP_REAR_HEIGHT', '%.3f' % -cgy)]),
@@ -193,8 +198,7 @@ def write_data(d, car_id, ui_name, p, wheels, wheel_radius, wheel_width, collide
                 ('WBCAR_TOP_FRONT', '0.40,0.17,0.15'), ('WBCAR_TOP_REAR', '0.40,0.17,-0.15'),
                 ('WBCAR_BOTTOM_FRONT', '0.48,-0.17,0.15'), ('WBCAR_BOTTOM_REAR', '0.48,-0.17,-0.15'),
                 ('WBTYRE_TOP', '0.17,0.15,0'), ('WBTYRE_BOTTOM', '0.14,-0.18,0'),
-                ('WBCAR_STEER', '0.48,-0.14,%s' % ('-0.25' if front else '-0.25')),
-                ('WBTYRE_STEER', '0.15,-0.14,-0.25'),
+                ('WBCAR_STEER', '0.48,-0.14,%.2f' % -steer_arm), ('WBTYRE_STEER', '0.15,-0.14,%.2f' % -steer_arm),
                 ('TOE_OUT', 0), ('STATIC_CAMBER', 0), ('SPRING_RATE', '%d' % p['spring']),
                 ('PROGRESSIVE_SPRING_RATE', 0), ('BUMP_STOP_RATE', 80000), ('BUMPSTOP_UP', 0.14),
                 ('BUMPSTOP_DN', 0.14), ('PACKER_RANGE', 0.25), ('DAMP_BUMP', '%d' % p['damp_bump']),
@@ -348,6 +352,12 @@ def add_driver(root, donor, eyes):
             shutil.copy(os.path.join(donor, 'animations', k.group(2).strip()), os.path.join(root, 'animations'))
         out.append(line)
     open(os.path.join(root, 'data', 'driver3d.ini'), 'w', newline='\r\n').write('\n'.join(out) + '\n')
+    # the driver is only there for AC and CSP: C1's eyes are well forward of where a driver's body fits, so CSP
+    # hides all of the driver's model (the cockpit camera stays at C1's)
+    model = next((l.split('=', 1)[1].strip() for l in out if re.match(r'\s*NAME\s*=', l)), 'driver')
+    os.makedirs(os.path.join(root, 'extension'), exist_ok=True)
+    open(os.path.join(root, 'extension', 'ext_config.ini'), 'w', newline='\r\n').write(
+        '[MODEL_REPLACEMENT_0]\nFILE=%s.kn5\nHIDE=?\n' % model)
     shutil.copy(os.path.join(donor, 'driver_base_pos.knh'), root)
 
 

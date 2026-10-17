@@ -50,6 +50,7 @@ all in the converter; keep them when converting other cars.
 | Need | Without it |
 | --- | --- |
 | A driver: `data/driver3d.ini`, `driver_base_pos.knh` and the animations it names (`animations/steer.ksanim`), here taken from another car with `driver=` and moved by the difference between the two cars' `DRIVEREYES` | CSP crashes on the first frame after loading (`SplashScreen::postRender`, inside CSP's `dwrite.dll`): it reads a null pointer in AC's car object. The showroom still works |
+| `car.ini` `LINEAR_STEER_ROD_RATIO` = steering arm length x pi/180 (the rack travel, in m, per `STEER_RATIO` degrees of steering wheel: one degree at the wheels), and `STEER_RATIO` negative when the arm (`WBTYRE_STEER`) is behind the hub | With 0 the front wheels don't steer at all |
 | `collider.kn5` laid out root node -> a child node -> the mesh | AC crashes in `CarAvatar::initPhysics`: it takes the root's first child's first child without checking |
 | `WHEEL_LF/RF/LR/RR` nodes and a `SUSP_LF/RF/LR/RR` node beside each (empty is fine) | CSP: "does not have required wheel nodes" |
 | `COCKPIT_HR`/`COCKPIT_LR` nodes with `STEER_HR`/`STEER_LR` inside them (empty here: C1 cars have no interior), named by `lods.ini [COCKPIT_HR]` | A working car has them; added along with the rest |
@@ -57,6 +58,8 @@ all in the converter; keep them when converting other cars.
 | `setup.ini [GEARS] USE_GEARSET=0` | "GEAR COULD NOT FIND GEAR_1" |
 | `flames.ini [HEADER]` with `INTENSITY` (no flames needed), `lights.ini [HEADER] VERSION=3` | `KEY_NOT_FOUND [HEADER] INTENSITY` |
 | `damage.ini [SCRATCHES] [OSCILLATIONS]`, `fuel_cons.ini`, `sounds.ini [ENGINE]` | Present in a working car |
+
+The driver is only there for AC and CSP: C1's eyes (where the cockpit camera goes) are well forward of where a driver's body fits, so `extension/ext_config.ini` hides all of the driver's model (`[MODEL_REPLACEMENT_0] FILE=<driver>.kn5 HIDE=?`).
 
 CSP's log still says "No tyre meshes found" for the wheels (it doesn't find them by node name; a working car's
 tyres use the `ksTyres` shader). That is only a warning: the car loads and drives without it.
