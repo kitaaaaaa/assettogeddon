@@ -355,7 +355,50 @@ def add_driver(root, donor, eyes):
     shutil.copy(os.path.join(donor, 'driver_base_pos.knh'), root)
 
 
+def set_ini_values(text, values):
+    """text with {(section, key): value} put in its existing lines (comments and everything else kept)."""
+    import re
+    out, section = [], None
+    for line in text.splitlines():
+        m = re.match(r'\s*\[([^\]]+)\]', line)
+        if m: section = m.group(1)
+        k = re.match(r'(\s*)(\w+)(\s*=\s*)([^;\t]*?)(\s*(?:[;\t].*)?)$', line)
+        if k and (section, k.group(2)) in values:
+            line = k.group(1) + k.group(2) + k.group(3) + str(values[(section, k.group(2))]) + k.group(5)
+        out.append(line)
+    return '\n'.join(out) + '\n'
+
+
+def use_suspension(root, donor):
+    """Another AC car's suspensions.ini and setup.ini, with this car's wheel placement: wheelbase, weight split,
+    track widths and wheel heights (BASEY), and no graphical wheel offsets (the model places its wheels)."""
+    import re, shutil
+    dd = os.path.join(donor, 'data')
+    ours, section = {}, None             # this car's own suspensions.ini, as write_data made it
+    for line in open(os.path.join(root, 'data', 'suspensions.ini')):
+        m = re.match(r'\[([^\]]+)\]', line.strip())
+        if m: section = m.group(1)
+        elif '=' in line: ours[(section, line.split('=')[0].strip())] = line.split('=', 1)[1].strip()
+    values = {k: ours[k] for k in (('BASIC', 'WHEELBASE'), ('BASIC', 'CG_LOCATION'), ('FRONT', 'TRACK'),
+                                   ('REAR', 'TRACK'), ('FRONT', 'BASEY'), ('REAR', 'BASEY'))}
+    for n in ('WHEEL', 'SUSP'):
+        for w in ('LF', 'RF', 'LR', 'RR'):
+            values[('GRAPHICS_OFFSETS', '%s_%s' % (n, w))] = 0
+    text = open(os.path.join(dd, 'suspensions.ini'), encoding='latin1').read()
+    open(os.path.join(root, 'data', 'suspensions.ini'), 'w', newline='\r\n').write(set_ini_values(text, values))
+    # setup.ini as it is, without the engine map item (this car has no engine maps)
+    out, skip = [], False
+    for line in open(os.path.join(dd, 'setup.ini'), encoding='latin1').read().splitlines():
+        if line.strip().startswith('['):
+            skip = line.strip().startswith('[ENGINE_MAPS]')
+        if not skip: out.append(line)
+    open(os.path.join(root, 'data', 'setup.ini'), 'w', newline='\r\n').write('\n'.join(out) + '\n')
+    shutil.copy(os.path.join(dd, 'final.rto'), os.path.join(root, 'data'))
+
+
 def main(data, android, out, car_id, ui_name, car_txt, *skins):
+    susp = next((s.split('=', 1)[1] for s in skins if s.startswith('suspension=')), None)
+    skins = [s for s in skins if not s.startswith('suspension=')]
     donor = next((s.split('=', 1)[1] for s in skins if s.startswith('driver=')), None)
     skins = [s for s in skins if not s.startswith('driver=')]
     meshes = android_meshes(android)
@@ -449,6 +492,8 @@ def main(data, android, out, car_id, ui_name, car_txt, *skins):
     write_data(os.path.join(root, 'data'), car_id, ui_name, p, wheels, radius, width * 0.5, collider, eyes)
     if donor:
         add_driver(root, donor, eyes)
+    if susp:
+        use_suspension(root, susp)
 
     # skins
     for skin, txt in paints:
