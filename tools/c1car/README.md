@@ -6,8 +6,10 @@ the result.
 
 ```
 python c1car_to_ac.py <PC DATA folder> <Android car folder> <output folder> c1_eagle "Eagle (Carmageddon)" BLKEAGLE.TXT
-    [black=EAGBLAK.TXT blue=EAGBLUE.TXT ...]
+    [black=EAGBLAK.TXT blue=EAGBLUE.TXT ...] driver=<an installed AC car folder>
 ```
+
+`driver=` is needed for the car to load (see below): any working AC car with a `data/driver3d.ini`.
 
 The Android folder is one from the game's `VEHICLES` (`CARBODY.CNT`, the `.MDL` models). Each extra
 `name=CARFILE.TXT` adds a skin painted from that PC car file. Needs Python 3 with NumPy and Pillow.
@@ -36,5 +38,29 @@ surface (facing the same way) gives the PC texture's colour there. A part the PC
 | rolling resistance | `ROLLING_RESISTANCE_0` as that share of each wheel's load |
 | speed at which down force = weight | downforce: C1's grows with speed up to the car's weight at that speed and stays there; AC's with its square, matched at that speed |
 
-`car.ini` uses CSP's extended physics (`VERSION=extended-2`). The car has no sound of its own yet: give it one
+CSP's extended physics: `car.ini` `VERSION=extended-2`, suspensions `[_EXTENSION] TORQUE_MODE_EX=2`, tyres
+`[_EXTENSION]` with extended ray tracing, colliders `[_EXTENSION] VERSION=2`. The car has no sound of its own yet: give it one
 with Content Manager's "Replace sound".
+
+## What AC and CSP need for the car to load
+
+Each of these crashed the game, or was in a working car (used as the reference) and missing here. The fixes are
+all in the converter; keep them when converting other cars.
+
+| Need | Without it |
+| --- | --- |
+| A driver: `data/driver3d.ini`, `driver_base_pos.knh` and the animations it names (`animations/steer.ksanim`), here taken from another car with `driver=` and moved by the difference between the two cars' `DRIVEREYES` | CSP crashes on the first frame after loading (`SplashScreen::postRender`, inside CSP's `dwrite.dll`): it reads a null pointer in AC's car object. The showroom still works |
+| `collider.kn5` laid out root node -> a child node -> the mesh | AC crashes in `CarAvatar::initPhysics`: it takes the root's first child's first child without checking |
+| `WHEEL_LF/RF/LR/RR` nodes and a `SUSP_LF/RF/LR/RR` node beside each (empty is fine) | CSP: "does not have required wheel nodes" |
+| `COCKPIT_HR`/`COCKPIT_LR` nodes with `STEER_HR`/`STEER_LR` inside them (empty here: C1 cars have no interior), named by `lods.ini [COCKPIT_HR]` | A working car has them; added along with the rest |
+| `car.ini [PIT_STOP]` and `[RULES]` | Missing keys read when the pit stop and crew load |
+| `setup.ini [GEARS] USE_GEARSET=0` | "GEAR COULD NOT FIND GEAR_1" |
+| `flames.ini [HEADER]` with `INTENSITY` (no flames needed), `lights.ini [HEADER] VERSION=3` | `KEY_NOT_FOUND [HEADER] INTENSITY` |
+| `damage.ini [SCRATCHES] [OSCILLATIONS]`, `fuel_cons.ini`, `sounds.ini [ENGINE]` | Present in a working car |
+
+CSP's log still says "No tyre meshes found" for the wheels (it doesn't find them by node name; a working car's
+tyres use the `ksTyres` shader). That is only a warning: the car loads and drives without it.
+
+To find what a car is missing, compare it with a car that works: the KN5 node tree, and each `data/*.ini`'s sections
+and keys. AC's `log.txt`, CSP's `custom_shaders_patch.log` and the crash report's minidump (a zip: the `.dmp`
+inside gives the faulting instruction and registers) say where loading stopped.
