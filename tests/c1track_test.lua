@@ -16,7 +16,10 @@ local f = assert(io.open(tracks .. '/ks_test/layout/data/carmageddon.ini', 'wb')
 f:write('[CARMAGEDDON]\r\nRACE=TRACKA1.TXT\r\nSCALE=10\r\n')
 f:close()
 
-local H = require('tests/csp_mock')({dataDir = fakeRoot, tracksDir = tracks})
+-- C1T_INI=1: found by CSP's track data loader instead (as in AC; the file in the folder is the fallback)
+local viaIni = os.getenv('C1T_INI') == '1'
+local H = require('tests/csp_mock')({dataDir = fakeRoot, tracksDir = not viaIni and tracks or nil,
+  trackIni = viaIni and {['carmageddon.ini'] = {CARMAGEDDON = {RACE = 'TRACKA1.TXT', SCALE = 10}}} or nil})
 H.makeCar(0, 0, 550, 0)
 H.makeCar(1, 30, -900, 0)
 H.load(400)
@@ -24,8 +27,9 @@ for _ = 1, 400 do H.frame() end
 
 -- peds: the race file's two (not the power-up, not random ones), ids 1 and 2, where C1 starts them
 local race = {}
-for _, p in ipairs(H.state().peds) do  -- not Carmapeds' own flagman (id 0) and grid girls
-  if not p.gridGirl and p.id ~= 0 then race[#race + 1] = p end
+for _, p in ipairs(H.state().peds) do  -- not the grid girls
+  check(p.id ~= 0, 'no flagman of Carmapeds\' own: the race places its peds')
+  if not p.gridGirl then race[#race + 1] = p end
 end
 check(#race == 2, 'the race file\'s 2 peds and no others: ' .. #race)
 local byId = {}

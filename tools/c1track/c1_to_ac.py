@@ -9,13 +9,14 @@ import os, sys, json, math
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import c1track, textures, kn5w
+import c1track, textures, kn5w, geom, ailine
 
 U = 6.9            # metres per C1 world unit
 CELL = 40.0        # C1 units per mesh tile (split for culling)
 TEX_SCALE = 4      # nearest-neighbour upscale, keeps C1's pixel look under AC's filtering
 TEX_MAX = 512
 WALL_NY = 0.5      # faces steeper than this are WALL
+WALL_DEPTH = 2.5 / U  # C1 units: hidden thickness behind one-sided walls (AC tunnels through bare faces)
 
 
 def surface_of(mat):
@@ -33,25 +34,43 @@ def normal(P):
     return n / l if l > 1e-12 else None
 
 
-class Ground:
-    def __init__(self, tris):
-        self.t = np.array([P for P in tris])        # n x 3 x 3
+def ground_y(index, x, z, ymax):
+    return index.below(x, z, ymax)[0]
 
-    def below(self, x, z, ymax):
-        """Highest surface y at (x, z) not above ymax, or None."""
-        t = self.t
-        ax, az, bx, bz, cx, cz = t[:, 0, 0], t[:, 0, 2], t[:, 1, 0], t[:, 1, 2], t[:, 2, 0], t[:, 2, 2]
-        d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz)
-        ok = np.abs(d) > 1e-12
-        d = np.where(ok, d, 1)
-        l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d
-        l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d
-        l3 = 1 - l1 - l2
-        ins = ok & (l1 >= -1e-6) & (l2 >= -1e-6) & (l3 >= -1e-6)
-        y = l1 * t[:, 0, 1] + l2 * t[:, 1, 1] + l3 * t[:, 2, 1]
-        y = np.where(ins & (y <= ymax), y, -np.inf)
-        m = y.max()
-        return None if m == -np.inf else float(m)
+
+def add_wall_thickness(k, walls, solid):
+    """Hidden collision behind each one-sided wall: the face pushed back WALL_DEPTH into a closed slab, cut
+    short where something else is behind it (the other side of a thin wall, a road), so it never sticks out."""
+    buckets = {}
+    slabs = []
+    for P, n in walls:
+        P = np.array(P); c = P.mean(0)
+        depth = WALL_DEPTH
+        for o in [c] + [c + (p - c) * 0.8 for p in P]:
+            hit = solid.ray(o - n * 0.005, -n, WALL_DEPTH)
+            if hit is not None: depth = min(depth, hit - 0.01)
+        if depth < 0.2 / U: continue
+        Q = P - n * depth
+        faces = [Q[::-1]]                                  # back
+        for i in range(3):
+            a, b = i, (i + 1) % 3
+            faces += [np.array([P[b], P[a], Q[a]]), np.array([P[b], Q[a], Q[b]])]
+        faces += [f[::-1] for f in faces]                  # both sides: never one-sided again
+        key = (int(math.floor(c[0] / CELL)), int(math.floor(c[2] / CELL)))
+        buckets.setdefault(key, []).extend(faces)
+        slabs += faces[:7]
+    for (cx, cz), faces in sorted(buckets.items()):
+        for start in range(0, len(faces), 21000):
+            verts, idx = [], []
+            for F in faces[start:start + 21000]:
+                fn = normal(F)
+                if fn is None: continue
+                for p in F:
+                    idx.append(len(verts))
+                    verts.append((p[0] * U, p[1] * U, p[2] * U, fn[0], fn[1], fn[2], 0.0, 0.0, 1.0, 0.0, 0.0))
+            if verts:
+                k.meshes.append(('1WALL_THICK_%d_%d_%d' % (cx, cz, start), verts, idx, 0, False))
+    return slabs
 
 
 def dummy(pos, fwd):
@@ -71,7 +90,9 @@ def main(data, race_name, out, folder, ui_name):
 
     k = kn5w.KN5()
     mat_index, tex_done = {}, {}
-    collide_tris = []
+    collide_tris = []   # drivable (upward) faces: the ground
+    solid_tris = []     # everything cars hit
+    thin_walls = []     # one-sided walls, to get a hidden thickness
     buckets = {}
     for (kind, mat), tris in sorted(groups.items()):
         if mat not in mat_index:
@@ -94,6 +115,8 @@ def main(data, race_name, out, folder, ui_name):
             s = surf
             if s and abs(n[1]) < WALL_NY: s = 'WALL'
             if s and n[1] >= WALL_NY: collide_tris.append(P)
+            if s: solid_tris.append(P)
+            if s == 'WALL' and not two: thin_walls.append((P, n))
             cx = sum(p[0] for p in P) / 3; cz = sum(p[2] for p in P) / 3
             key = (s, mat, int(math.floor(cx / CELL)), int(math.floor(cz / CELL)))
             faces = [(P, UV, n)]
@@ -113,9 +136,10 @@ def main(data, race_name, out, folder, ui_name):
             name = '%s%s_%d_%d' % (prefix, base, cx, cz)
             counts[name] = counts.get(name, 0) + 1
             if counts[name] > 1: name += '_%d' % counts[name]
-            k.meshes.append((name, verts, idx, mat_index[mat], bool(s)))
+            k.meshes.append((name, verts, idx, mat_index[mat], True))
 
-    ground = Ground(collide_tris)
+    ground = geom.TriIndex(collide_tris)
+    wall_slabs = add_wall_thickness(k, thin_walls, geom.TriIndex(solid_tris))
 
     # checkpoints -> AC timing gates. C1 counts a lap at its last checkpoint, so that one is AC's
     # finish line (AC_TIME_0) and checkpoints 1..n-1 are the sector splits AC_TIME_1..n-1.
@@ -134,7 +158,7 @@ def main(data, race_name, out, folder, ui_name):
         seg = b - a
         nrm = np.array([seg[1], -seg[0]])
         if np.dot(nrm, travel) < 0: nrm = -nrm
-        y = ground.below(mid[0], mid[1], 50.0)
+        y = ground_y(ground, mid[0], mid[1], 50.0)
         y = y if y is not None else 0.0
         fwd = (nrm[0], 0, nrm[1])
         left = np.cross([0, 1, 0], fwd)
@@ -153,7 +177,7 @@ def main(data, race_name, out, folder, ui_name):
     for i in range(16):
         row, col = divmod(i, 2)
         p = np.array([gx, gy, gz]) + left * (0.4 if col == 0 else -0.4) - fwd * (1.2 * row + 0.3 * col)
-        y = ground.below(p[0], p[2], gy + 1.0)
+        y = ground_y(ground, p[0], p[2], gy + 1.0)
         p[1] = (y if y is not None else gy) + 0.1
         slots.append(p)
         k.dummies.append(('AC_START_%d' % i, dummy(p, fwd)))
@@ -161,10 +185,16 @@ def main(data, race_name, out, folder, ui_name):
     fin = gates[-1]
     c = (np.array(fin['L']) + np.array(fin['R'])) / 2
     hot = c - np.array(fin['forward']) * 8
-    y = ground.below(hot[0], hot[2], c[1] + 1.0); hot[1] = (y if y is not None else c[1]) + 0.1
+    y = ground_y(ground, hot[0], hot[2], c[1] + 1.0); hot[1] = (y if y is not None else c[1]) + 0.1
     k.dummies.append(('AC_HOTLAP_START_0', dummy(hot, fin['forward'])))
 
     k.write(os.path.join(root, folder + '.kn5'), root=folder.upper())
+
+    # the AI line, along C1's opponent road network through the checkpoints
+    os.makedirs(os.path.join(root, 'ai'), exist_ok=True)
+    P, length, extra = ailine.build(race, gates, ground, geom.TriIndex(solid_tris + wall_slabs), U)
+    ailine.write(os.path.join(root, 'ai', 'fast_lane.ai'), P, extra)
+    print('AI line: %d points, %.2f km' % (len(P), length[-1] / 1000))
 
     race['file'] = os.path.basename(c1track.find(data + '/RACES', race_name)).upper()
     write_data(root, t, race, ui_name, len(slots))

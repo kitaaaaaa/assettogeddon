@@ -87,6 +87,17 @@ def read_race(path):
                 instr.append((kind, r.nums()))
         peds.append({'ref': ref, 'initial': initial, 'instructions': instr})
     race['peds'] = peds
+    # the opponents' road network: nodes, and sections (node, node, speeds, width, one way: only first to second)
+    race['path_nodes'], race['path_sections'] = [], []
+    try:
+        while r.line() != 'START OF OPPONENT PATHS':
+            pass
+        race['path_nodes'] = [r.nums()[:3] for _ in range(r.int())]
+        for _ in range(r.int()):
+            v = r.nums()
+            race['path_sections'].append({'a': int(v[0]), 'b': int(v[1]), 'width': v[6], 'one_way': int(v[7]) == 1})
+    except EOFError:
+        pass
     return race
 
 

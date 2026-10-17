@@ -57,19 +57,36 @@ local FONT_UPSCALE = 3
 
 -- A track converted from a Carmageddon 1 race says which race in its data/carmageddon.ini (RACE = its race
 -- file, SCALE = metres per C1 world unit): its peds are then the race file's, on their C1 routes, and its
--- checkpoints work as in C1. {file, scale} or nil.
-local c1race
+-- checkpoints work as in C1. Read with CSP's track data loader (it knows where the track's data is), or failing
+-- that from the track's folder. Returns {file, scale}, or nil and why (shown in the settings window).
+local c1race, c1raceNote
 local function readTrackRace()
-  if not (ac.getFolder and ac.FolderID and ac.FolderID.ContentTracks) then return nil end  -- not AC (BeamNG)
+  if not (ac.getFolder and ac.FolderID and ac.FolderID.ContentTracks) then return nil, nil end  -- not AC (BeamNG)
+  local tried = {}
+  if ac.INIConfig and ac.INIConfig.trackData then
+    local ok, ini = pcall(ac.INIConfig.trackData, 'carmageddon.ini')
+    if ok and ini then
+      local file = ini:get('CARMAGEDDON', 'RACE', '')
+      if type(file) == 'string' and file ~= '' then
+        return {file = file, scale = tonumber(ini:get('CARMAGEDDON', 'SCALE', 6.9)) or 6.9}
+      end
+      tried[#tried + 1] = 'track data: no RACE'
+    else
+      tried[#tried + 1] = 'track data: ' .. tostring(ini)
+    end
+  end
   local path = ac.getFolder(ac.FolderID.ContentTracks) .. '/' .. ac.getTrackFullID('/') .. '/data/carmageddon.ini'
-  if not io.fileExists(path) then return nil end
-  local f = io.open(path, 'rb')
-  if not f then return nil end
-  local text = f:read('*a') or ''
-  f:close()
-  local file = text:match('RACE%s*=%s*([%w_%-%.]+)')
-  if not file then return nil end
-  return {file = file, scale = tonumber(text:match('SCALE%s*=%s*([%d%.]+)')) or 6.9}
+  local f = io.fileExists(path) and io.open(path, 'rb')
+  if f then
+    local text = f:read('*a') or ''
+    f:close()
+    local file = text:match('RACE%s*=%s*([%w_%-%.]+)')
+    if file then return {file = file, scale = tonumber(text:match('SCALE%s*=%s*([%d%.]+)')) or 6.9} end
+    tried[#tried + 1] = path .. ': no RACE'
+  else
+    tried[#tried + 1] = path .. ': not found'
+  end
+  return nil, table.concat(tried, '; ')
 end
 
 local function startLoading()
@@ -98,8 +115,10 @@ local function startLoading()
       io_.lastError = why
       return nil
     end
-    c1race = readTrackRace()
-    if c1race then log(('C1 track: race %s, %g m per unit'):format(c1race.file, c1race.scale)) end
+    local why
+    c1race, why = readTrackRace()
+    c1raceNote = why and ('Not a Carmageddon track (%s).'):format(why) or nil
+    if c1race then log(('C1 track: race %s, %g m per unit'):format(c1race.file, c1race.scale)) elseif why then log(c1raceNote) end
     local d, err = c1data.load(__dirname, io_, coroutine.yield, {robots = settings.robots, version = settings.dataVersion,
       race = c1race and c1race.file})
     if not d then
@@ -656,7 +675,8 @@ local function populateTask(pedCount, groupKey)
   end
   if #randomTypes == 0 then randomTypes = #others > 0 and others or data.peds end
   local left = pedCount
-  if flagmanType and left > 0 then
+  -- (a C1 race places its own flagman, with the rest of its peds)
+  if flagmanType and left > 0 and not (data.raceLayout and c1race) then
     local f = spawnFlagman(flagmanType)
     if f then list[#list + 1], byId[0], left = f, f, left - 1 end
   end
@@ -1290,6 +1310,15 @@ local function describePlacement()
     end
   end
   local parts = {}
+  if c1race then
+    parts[#parts + 1] = data.raceLayout
+      and ('Carmageddon track: race %s, its %d peds on their C1 routes, %d checkpoints.')
+        :format(c1race.file, #data.raceLayout.peds, #data.raceLayout.checkpoints)
+      or ('Carmageddon track (race %s), but DATA\\RACES\\%s couldn\'t be read (see the warnings): random peds.')
+        :format(c1race.file, c1race.file)
+  elseif c1raceNote then
+    parts[#parts + 1] = c1raceNote
+  end
   if splineAvailable() then
     parts[#parts + 1] = ('AI line: %.1f km.'):format(trackKm())
   else
