@@ -394,10 +394,11 @@ def use_suspension(root, donor):
         if not skip: out.append(line)
     open(os.path.join(root, 'data', 'setup.ini'), 'w', newline='\r\n').write('\n'.join(out) + '\n')
     # the donor's final drive choices, with this car's own (C1's) among them in ratio order
-    final = float(re.search(r'^FINAL=([\d.]+)', open(os.path.join(root, 'data', 'drivetrain.ini')).read(), re.M).group(1))
+    final_text = re.search(r'^FINAL=([\d.]+)', open(os.path.join(root, 'data', 'drivetrain.ini')).read(), re.M).group(1)
+    final = float(final_text)
     rto = [l for l in open(os.path.join(dd, 'final.rto'), encoding='latin1').read().splitlines() if l.strip()]
     at = next((i for i, l in enumerate(rto) if float(l.split('|')[1]) > final), len(rto))
-    rto.insert(at, 'C1|%.3f' % final)
+    rto.insert(at, 'C1|' + final_text)                  # exactly drivetrain.ini's FINAL
     open(os.path.join(root, 'data', 'final.rto'), 'w', newline='\r\n').write('\n'.join(rto) + '\n')
 
 
